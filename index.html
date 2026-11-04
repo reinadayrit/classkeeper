@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClassKeeper — Smart Attendance & Classroom Management</title>
+    <!-- Google Fonts: Poppins -->
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-dark-1: #070F23;
+            --bg-dark-2: #0F2552;
+            --bg-dark-3: #1E3A8A;
+            --accent-blue: #2563EB;
+            --accent-cyan: #38BDF8;
+            --accent-glow: #60A5FA;
+            --text-light: #F8FAFC;
+            --text-muted: #94A3B8;
+            --glass-bg: rgba(15, 37, 82, 0.45);
+            --glass-border: rgba(96, 165, 250, 0.25);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Poppins', sans-serif;
+        }
+
+        body {
+            background: linear-gradient(135deg, var(--bg-dark-1), var(--bg-dark-2), #0B142B);
+            color: var(--text-light);
+            min-height: 100vh;
+            overflow-x: hidden;
+            scroll-behavior: smooth;
+            position: relative;
+        }
+
+        /* --- BUBBLE BACKGROUND CONTAINER --- */
+        #bubble-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            pointer-events: none;
+            z-index: 0;
+            overflow: hidden;
+        }
+
+        .bubble {
+            position: absolute;
+            bottom: -100px;
+            background: radial-gradient(circle at 30% 30%, rgba(96, 165, 250, 0.4), rgba(37, 99, 235, 0.1));
+            border: 1px solid rgba(147, 197, 253, 0.3);
+            box-shadow: 0 0 15px rgba(96, 165, 250, 0.2);
+            border-radius: 50%;
+            animation: rise 12s infinite linear;
+        }
+
+        @keyframes rise {
+            0% {
+                transform: translateY(0) scale(0.8) rotate(0deg);
+                opacity: 0;
+            }
+            20% {
+                opacity: 0.6;
+            }
+            80% {
+                opacity: 0.6;
+            }
+            100% {
+                transform: translateY(-120vh) scale(1.2) rotate(360deg);
+                opacity: 0;
+            }
+        }
+
+        /* --- NAVBAR --- */
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.2rem 8%;
+            background: rgba(7, 15, 35, 0.7);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            position: fixed;
+            top: 0;
+            width: 100%;
+            z-index: 1000;
+            border-bottom: 1px solid var(--glass-border);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: var(--text-light);
+            text-shadow: 0 0 12px rgba(96, 165, 250, 0.4);
+        }
+
+        .logo i {
+            color: var(--accent-cyan);
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+            list-style: none;
+            align-items: center;
+        }
+
+        .nav-links a {
+            text-decoration: none;
+            color: var(--text-muted);
+            font-weight: 500;
+            font-size: 0.95rem;
+            transition: all 0.3s ease;
+        }
+
+        .nav-links a:hover {
+            color: var(--accent-cyan);
+            text-shadow: 0 0 8px rgba(56, 189, 248, 0.5);
+        }
+
+        .btn-nav {
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+            color: white !important;
+            padding: 0.5rem 1.3rem;
+            border-radius: 10px;
+            box-shadow: 0 0 15px rgba(37, 99, 235, 0.4);
+            transition: all 0.3s ease !important;
+        }
+
+        .btn-nav:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 0 25px rgba(56, 189, 248, 0.6) !important;
+        }
+
+        /* --- HERO SECTION --- */
+        .hero {
+            position: relative;
+            z-index: 1;
+            padding: 9rem 8% 5rem;
+            display: grid;
+            grid-template-columns: 1.2fr 0.8fr;
+            align-items: center;
+            gap: 4rem;
+            min-height: 90vh;
+        }
+
+        .hero-text h1 {
+            font-size: 3.2rem;
+            line-height: 1.2;
+            color: var(--text-light);
+            font-weight: 800;
+            margin-bottom: 1.2rem;
+        }
+
+        /* FIXED: Included standard background-clip alongside -webkit prefix */
+        .hero-text h1 span {
+            background: linear-gradient(135deg, #60A5FA, #38BDF8, #93C5FD);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 30px rgba(96, 165, 250, 0.3);
+        }
+
+        .hero-text p {
+            font-size: 1.08rem;
+            color: #CBD5E1;
+            margin-bottom: 2rem;
+            line-height: 1.6;
+        }
+
+        .cta-group {
+            display: flex;
+            gap: 1.2rem;
+            align-items: center;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+            color: white;
+            padding: 0.9rem 1.8rem;
+            border-radius: 12px;
+            text-decoration: none;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 10px 25px rgba(37, 99, 235, 0.4);
+            transition: all 0.3s ease;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 35px rgba(56, 189, 248, 0.5);
+        }
+
+        .btn-secondary {
+            border: 1px solid var(--glass-border);
+            background: var(--glass-bg);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            color: var(--text-light);
+            padding: 0.85rem 1.6rem;
+            border-radius: 12px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--accent-cyan);
+            background: rgba(37, 99, 235, 0.2);
+            box-shadow: 0 0 15px rgba(96, 165, 250, 0.2);
+        }
+
+        /* --- QR CARD GLASSMORPHISM --- */
+        .qr-card-container {
+            display: flex;
+            justify-content: center;
+            position: relative;
+            z-index: 1;
+        }
+
+        .qr-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            padding: 2.2rem;
+            border-radius: 24px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), inset 0 0 20px rgba(96, 165, 250, 0.15);
+            border: 1px solid var(--glass-border);
+            text-align: center;
+            width: 100%;
+            max-width: 320px;
+            animation: float 4s ease-in-out infinite;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-12px); }
+        }
+
+        .qr-card img {
+            width: 190px;
+            height: 190px;
+            border-radius: 16px;
+            padding: 10px;
+            background: white;
+            margin: 1.2rem 0;
+            box-shadow: 0 0 20px rgba(56, 189, 248, 0.3);
+        }
+
+        .qr-badge {
+            display: inline-block;
+            background: rgba(16, 185, 129, 0.15);
+            color: #34D399;
+            border: 1px solid rgba(52, 211, 153, 0.3);
+            font-weight: 600;
+            font-size: 0.8rem;
+            padding: 4px 14px;
+            border-radius: 20px;
+        }
+
+        /* --- FEATURES SECTION --- */
+        .features {
+            position: relative;
+            z-index: 1;
+            padding: 6rem 8%;
+            background: rgba(7, 15, 35, 0.6);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-top: 1px solid var(--glass-border);
+            border-bottom: 1px solid var(--glass-border);
+        }
+
+        .section-title {
+            text-align: center;
+            max-width: 600px;
+            margin: 0 auto 4rem;
+        }
+
+        .section-title h2 {
+            font-size: 2.2rem;
+            color: var(--text-light);
+            margin-bottom: 0.5rem;
+        }
+
+        .section-title p {
+            color: var(--text-muted);
+            font-size: 1rem;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 2rem;
+        }
+
+        .feature-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            padding: 2rem;
+            border-radius: 20px;
+            border: 1px solid var(--glass-border);
+            transition: all 0.3s ease;
+            opacity: 0;
+            transform: translateY(30px);
+        }
+
+        .feature-card.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .feature-card:hover {
+            transform: translateY(-8px);
+            border-color: var(--accent-cyan);
+            box-shadow: 0 15px 35px rgba(37, 99, 235, 0.25);
+        }
+
+        .icon-box {
+            width: 52px;
+            height: 52px;
+            background: rgba(37, 99, 235, 0.2);
+            border: 1px solid rgba(96, 165, 250, 0.4);
+            color: var(--accent-cyan);
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.4rem;
+            margin-bottom: 1.2rem;
+            box-shadow: 0 0 15px rgba(56, 189, 248, 0.2);
+        }
+
+        .feature-card h3 {
+            font-size: 1.2rem;
+            color: var(--text-light);
+            margin-bottom: 0.6rem;
+        }
+
+        .feature-card p {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+
+        /* --- DOWNLOAD CALLOUT --- */
+        .download-callout {
+            position: relative;
+            z-index: 1;
+            margin: 6rem 8%;
+            background: linear-gradient(135deg, rgba(15, 37, 82, 0.8), rgba(30, 58, 138, 0.8));
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-radius: 28px;
+            padding: 4rem 2rem;
+            text-align: center;
+            color: white;
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4), 0 0 30px rgba(37, 99, 235, 0.2);
+        }
+
+        .download-callout h2 {
+            font-size: 2.4rem;
+            margin-bottom: 1rem;
+        }
+
+        .download-callout p {
+            color: #93C5FD;
+            max-width: 550px;
+            margin: 0 auto 2rem;
+        }
+
+        /* --- FOOTER --- */
+        footer {
+            position: relative;
+            z-index: 1;
+            text-align: center;
+            padding: 2rem 8%;
+            border-top: 1px solid var(--glass-border);
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            background: rgba(7, 15, 35, 0.9);
+        }
+
+        /* RESPONSIVE */
+        @media (max-width: 900px) {
+            .hero {
+                grid-template-columns: 1fr;
+                text-align: center;
+                padding-top: 7rem;
+            }
+
+            .cta-group {
+                justify-content: center;
+            }
+
+            .hero-text h1 {
+                font-size: 2.4rem;
+            }
+
+            .nav-links {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- FLOATING BUBBLE CONTAINER -->
+    <div id="bubble-container"></div>
+
+    <!-- NAVBAR -->
+    <nav>
+        <div class="logo">
+            <i class="fa-solid fa-qrcode"></i> ClassKeeper
+        </div>
+        <ul class="nav-links">
+            <li><a href="#about">About</a></li>
+            <li><a href="#features">Features</a></li>
+            <li><a href="#download" class="btn-nav">Download APK</a></li>
+        </ul>
+    </nav>
+
+    <!-- HERO SECTION -->
+    <section class="hero" id="about">
+        <div class="hero-text">
+            <h1>Smart Attendance & <span>Geofence Validation</span></h1>
+            <p>ClassKeeper streamlines classroom check-ins with expiring QR codes, hardware GPS proximity verification, real-time analytics, and AI-driven announcement synthesis.</p>
+            <div class="cta-group">
+                <a href="https://your-domain.com/classkeeper.apk" class="btn-primary" download>
+                    <i class="fa-solid fa-download"></i> Download APK
+                </a>
+                <a href="#features" class="btn-secondary">Explore Features</a>
+            </div>
+        </div>
+
+        <div class="qr-card-container">
+            <div class="qr-card" id="download">
+                <span class="qr-badge"><i class="fa-solid fa-mobile-screen"></i> Android Release</span>
+                <br>
+                <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=https://your-domain.com/classkeeper.apk&color=0F2552" alt="ClassKeeper APK QR Code">
+                <h3 style="color: var(--text-light); font-size: 1.1rem;">Scan to Download</h3>
+                <p style="color: var(--text-muted); font-size: 0.8rem; margin-top: 4px;">Point camera to install ClassKeeper directly</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- FEATURES SECTION -->
+    <section class="features" id="features">
+        <div class="section-title">
+            <h2>Designed for Effortless Education</h2>
+            <p>Everything faculty and students need for seamless attendance tracking and clear communication.</p>
+        </div>
+
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="icon-box">
+                    <i class="fa-solid fa-location-dot"></i>
+                </div>
+                <h3>GPS Geofencing</h3>
+                <p>Verify attendance only when students are physically present within classroom boundaries (up to 30 meters).</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="icon-box">
+                    <i class="fa-solid fa-qrcode"></i>
+                </div>
+                <h3>Dynamic QR Sessions</h3>
+                <p>Generate temporary 15-minute expiring QR tokens to eliminate proxy attendance and unauthorized check-ins.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="icon-box">
+                    <i class="fa-solid fa-robot"></i>
+                </div>
+                <h3>Gemini AI Drafting</h3>
+                <p>Draft professional, structured course announcements instantly with integrated Google Gemini AI assistance.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="icon-box">
+                    <i class="fa-solid fa-chart-line"></i>
+                </div>
+                <h3>Real-Time Analytics</h3>
+                <p>Instant attendance feed updates powered by Supabase with downloadable roster records and attendance history.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- DOWNLOAD CALLOUT -->
+    <section class="download-callout">
+        <h2>Ready to Upgrade Your Classroom?</h2>
+        <p>Get the latest version of ClassKeeper today for Android and simplify attendance logging instantly.</p>
+        <a href="https://your-domain.com/classkeeper.apk" class="btn-primary" style="background: linear-gradient(135deg, #FFFFFF, #E2E8F0); color: var(--bg-dark-1);" download>
+            <i class="fa-solid fa-android" style="color: var(--accent-blue);"></i> Direct Download APK
+        </a>
+    </section>
+
+    <!-- FOOTER -->
+    <footer>
+        <p>&copy; 2026 ClassKeeper System. All rights reserved.</p>
+    </footer>
+
+    <!-- JS FOR FLOATING BUBBLES & INTERSECTION OBSERVER ANIMATION -->
+    <script>
+        document.addEventListener("DOMContentLoaded", () => {
+            // 1. Generate Floating Blue Bubbles
+            const bubbleContainer = document.getElementById('bubble-container');
+            const bubbleCount = 20;
+
+            for (let i = 0; i < bubbleCount; i++) {
+                const bubble = document.createElement('div');
+                bubble.classList.add('bubble');
+                
+                const size = Math.random() * 60 + 20; // Size between 20px and 80px
+                const left = Math.random() * 100; // Position across screen width
+                const delay = Math.random() * 10; // Staggered animation start
+                const duration = Math.random() * 8 + 8; // Animation speed
+
+                bubble.style.width = `${size}px`;
+                bubble.style.height = `${size}px`;
+                bubble.style.left = `${left}vw`;
+                bubble.style.animationDelay = `${delay}s`;
+                bubble.style.animationDuration = `${duration}s`;
+
+                bubbleContainer.appendChild(bubble);
+            }
+
+            // 2. Feature Card Scroll Reveal Animation
+            const cards = document.querySelectorAll('.feature-card');
+            const observer = new IntersectionObserver((entries) => {
+                entries.forEach((entry, index) => {
+                    if (entry.isIntersecting) {
+                        setTimeout(() => {
+                            entry.target.classList.add('visible');
+                        }, index * 100);
+                    }
+                });
+            }, { threshold: 0.1 });
+
+            cards.forEach(card => observer.observe(card));
+        });
+    </script>
+</body>
+</html>

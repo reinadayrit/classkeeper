@@ -1,0 +1,52 @@
+name: classkeeper
+description: "ClassKeeper - QR Attendance System with Smart Announcement & Analytics"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # UI & Typography
+  cupertino_icons: ^1.0.8
+  google_fonts: ^6.2.1
+
+  # Backend & AI
+  supabase_flutter: ^2.17.2
+  google_generative_ai: ^0.4.6
+
+  # Geolocation & Location Services
+  geolocator: ^13.0.2
+  flutter_map: ^6.1.0
+  latlong2: ^0.9.0
+
+  # QR Scanning & Generation
+  mobile_scanner: ^5.2.3
+  qr_flutter: ^4.1.0
+
+  # File & Storage Utilities
+  image_picker: ^1.1.2
+  file_picker: ^8.0.0
+  csv: ^6.0.0
+  path_provider: ^2.1.2
+  share_plus: ^10.0.0
+
+  http: ^1.6.0
+  pdf: ^3.13.1
+  printing: ^5.13.0  # Added for cross-platform PDF download & printing
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/logo.png
+    - assets/images/logo_home.png
+    - assets/images/sign.png
