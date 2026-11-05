@@ -354,6 +354,31 @@ class _StudentClassesScreenState extends State<StudentClassesScreen> {
     return isDateInRange(dt, range);
   }
 
+  // Month / weekday names used by the PDF
+  static const List<String> _pdfMonths = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  static const List<String> _pdfWeekdays = [
+    'Mon',
+    'Tue',
+    'Wed',
+    'Thu',
+    'Fri',
+    'Sat',
+    'Sun',
+  ];
+
   Future<void> _exportAttendancePdf({
     required String courseCode,
     required String courseName,
@@ -361,8 +386,6 @@ class _StudentClassesScreenState extends State<StudentClassesScreen> {
     String dateLabel = 'All Dates',
   }) async {
     try {
-      final pdf = pw.Document();
-
       final user = _supabase.auth.currentUser;
 
       final profileRes = await _supabase
@@ -371,202 +394,391 @@ class _StudentClassesScreenState extends State<StudentClassesScreen> {
           .eq('id', user?.id ?? '')
           .maybeSingle();
 
-      final studentName = profileRes?['full_name'] ?? user?.email ?? 'Student';
+      final String studentName =
+          (profileRes?['full_name'] ?? user?.email ?? 'Student').toString();
+      final String schoolId = (profileRes?['school_id'] ?? 'N/A').toString();
 
-      final schoolId = profileRes?['school_id'] ?? 'N/A';
+      // Fonts: Noto Sans supports accented names (n with tilde, etc.).
+      // If the phone is offline we fall back to the built-in font.
+      pw.Font? baseFont;
+      pw.Font? boldFont;
+      try {
+        baseFont = await PdfGoogleFonts.notoSansRegular()
+            .timeout(const Duration(seconds: 6));
+        boldFont = await PdfGoogleFonts.notoSansBold()
+            .timeout(const Duration(seconds: 6));
+      } catch (_) {
+        baseFont = null;
+        boldFont = null;
+      }
+      final bool unicodeOk = baseFont != null && boldFont != null;
 
-      int presentCount = 0;
-      int lateCount = 0;
-      int absentCount = 0;
-      int excusedCount = 0;
+      // The built-in font cannot draw symbols like the bullet or curly quotes
+      String safe(String text) {
+        var t = text
+            .replaceAll('\u2022', '-')
+            .replaceAll('\u2013', '-')
+            .replaceAll('\u2014', '-')
+            .replaceAll('\u2018', "'")
+            .replaceAll('\u2019', "'")
+            .replaceAll('\u201C', '"')
+            .replaceAll('\u201D', '"')
+            .replaceAll('\u2026', '...');
+        if (!unicodeOk) {
+          t = String.fromCharCodes(
+            t.runes.map((r) => r > 255 ? 63 : r), // 63 = "?"
+          );
+        }
+        return t;
+      }
 
-      for (final record in records) {
-        final status = record['status']?.toString().toUpperCase();
+      final doc = pw.Document(
+        theme: unicodeOk
+            ? pw.ThemeData.withFont(base: baseFont, bold: boldFont)
+            : null,
+      );
 
-        if (status == 'PRESENT') {
-          presentCount++;
-        } else if (status == 'LATE') {
-          lateCount++;
-        } else if (status == 'ABSENT') {
-          absentCount++;
-        } else if (status == 'EXCUSED') {
-          excusedCount++;
+      // ---------- data ----------
+      DateTime? recordDate(Map<String, dynamic> rec) {
+        final session = rec['attendance_sessions'] as Map<String, dynamic>?;
+        final String? d = session?['date']?.toString();
+        return (d != null ? DateTime.tryParse(d) : null) ??
+            DateTime.tryParse(rec['scanned_at']?.toString() ?? '')?.toLocal();
+      }
+
+      // newest first
+      final sorted = List<Map<String, dynamic>>.from(records)
+        ..sort((a, b) {
+          final da = recordDate(a);
+          final db = recordDate(b);
+          if (da == null || db == null) return 0;
+          return db.compareTo(da);
+        });
+
+      String dateText(Map<String, dynamic> rec) {
+        final d = recordDate(rec);
+        if (d == null) return 'N/A';
+        return '${_pdfWeekdays[d.weekday - 1]}, ${_pdfMonths[d.month - 1]} ${d.day}, ${d.year}';
+      }
+
+      String timeText(Map<String, dynamic> rec) {
+        final t =
+            DateTime.tryParse(rec['scanned_at']?.toString() ?? '')?.toLocal();
+        if (t == null) return '-';
+        final int h = t.hour % 12 == 0 ? 12 : t.hour % 12;
+        return '$h:${t.minute.toString().padLeft(2, '0')} ${t.hour >= 12 ? 'PM' : 'AM'}';
+      }
+
+      String reasonText(Map<String, dynamic> rec) {
+        final String category = (rec['reason_category'] ?? '').toString();
+        final String remarks = (rec['remarks'] ?? '').toString();
+        if (category.isNotEmpty && remarks.isNotEmpty) {
+          return '$category - $remarks';
+        }
+        if (category.isNotEmpty) return category;
+        if (remarks.isNotEmpty) return remarks;
+        return '-';
+      }
+
+      int present = 0, late = 0, excused = 0, absent = 0;
+      for (final r in sorted) {
+        switch (r['status']?.toString().toLowerCase()) {
+          case 'present':
+            present++;
+            break;
+          case 'late':
+            late++;
+            break;
+          case 'excused':
+            excused++;
+            break;
+          case 'absent':
+            absent++;
+            break;
+        }
+      }
+      final int total = sorted.length;
+      final double rate =
+          total == 0 ? 0 : (present + late + excused) / total * 100;
+
+      PdfColor statusColor(String status) {
+        switch (status.toLowerCase()) {
+          case 'present':
+            return PdfColors.green700;
+          case 'late':
+            return PdfColors.orange700;
+          case 'excused':
+            return PdfColors.purple700;
+          default:
+            return PdfColors.red700;
         }
       }
 
-      pdf.addPage(
+      String statusLabel(String status) {
+        if (status.isEmpty) return 'Present';
+        return status[0].toUpperCase() + status.substring(1).toLowerCase();
+      }
+
+      final now = DateTime.now();
+      final String generated =
+          '${_pdfMonths[now.month - 1]} ${now.day}, ${now.year}';
+
+      pw.Widget summaryBox(String label, String value, PdfColor color) {
+        return pw.Expanded(
+          child: pw.Container(
+            margin: const pw.EdgeInsets.symmetric(horizontal: 3),
+            padding: const pw.EdgeInsets.symmetric(vertical: 8),
+            decoration: pw.BoxDecoration(
+              color: PdfColors.white,
+              border: pw.Border.all(color: color, width: 1),
+              borderRadius: pw.BorderRadius.circular(6),
+            ),
+            child: pw.Column(
+              children: [
+                pw.Text(
+                  value,
+                  style: pw.TextStyle(
+                    fontSize: 15,
+                    fontWeight: pw.FontWeight.bold,
+                    color: color,
+                  ),
+                ),
+                pw.SizedBox(height: 2),
+                pw.Text(
+                  label,
+                  style: const pw.TextStyle(
+                    fontSize: 8,
+                    color: PdfColors.grey700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+
+      pw.Widget headerCell(String text) {
+        return pw.Padding(
+          padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+          child: pw.Text(
+            text,
+            style: pw.TextStyle(
+              fontSize: 9,
+              fontWeight: pw.FontWeight.bold,
+              color: PdfColors.white,
+            ),
+          ),
+        );
+      }
+
+      pw.Widget bodyCell(
+        String text, {
+        PdfColor? color,
+        bool bold = false,
+      }) {
+        return pw.Padding(
+          padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+          child: pw.Text(
+            safe(text),
+            style: pw.TextStyle(
+              fontSize: 9,
+              color: color ?? PdfColors.grey900,
+              fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
+            ),
+          ),
+        );
+      }
+
+      // ---------- page ----------
+      doc.addPage(
         pw.MultiPage(
           pageFormat: PdfPageFormat.a4,
-          margin: const pw.EdgeInsets.all(32),
-          build: (pw.Context context) {
-            return [
-              pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+          margin: const pw.EdgeInsets.fromLTRB(32, 32, 32, 40),
+          footer: (ctx) => pw.Container(
+            margin: const pw.EdgeInsets.only(top: 8),
+            child: pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Text(
+                  'Generated by ClassKeeper on $generated',
+                  style: const pw.TextStyle(
+                    fontSize: 8,
+                    color: PdfColors.grey600,
+                  ),
+                ),
+                pw.Text(
+                  'Page ${ctx.pageNumber} of ${ctx.pagesCount}',
+                  style: const pw.TextStyle(
+                    fontSize: 8,
+                    color: PdfColors.grey600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          build: (ctx) => [
+            // Title band
+            pw.Container(
+              width: double.infinity,
+              padding: const pw.EdgeInsets.all(14),
+              decoration: pw.BoxDecoration(
+                color: PdfColors.blue900,
+                borderRadius: pw.BorderRadius.circular(8),
+              ),
+              child: pw.Column(
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: [
-                  pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.start,
-                    children: [
-                      pw.Text(
-                        'ClassKeeper - Student Attendance Report',
-                        style: pw.TextStyle(
-                          fontSize: 18,
-                          fontWeight: pw.FontWeight.bold,
-                          color: PdfColors.blue900,
-                        ),
-                      ),
-                      pw.SizedBox(height: 4),
-                      pw.Text(
-                        '$courseCode - $courseName',
-                        style: pw.TextStyle(
-                          fontSize: 13,
-                          fontWeight: pw.FontWeight.bold,
-                          color: PdfColors.grey800,
-                        ),
-                      ),
-                      pw.SizedBox(height: 2),
-                      pw.Text(
-                        'Period: $dateLabel',
-                        style: const pw.TextStyle(
-                          fontSize: 10,
-                          color: PdfColors.grey700,
-                        ),
-                      ),
-                    ],
-                  ),
                   pw.Text(
-                    'Generated:\n${DateTime.now().toString().split('.')[0]}',
-                    style: const pw.TextStyle(
-                      fontSize: 9,
-                      color: PdfColors.grey600,
+                    'ClassKeeper',
+                    style: pw.TextStyle(
+                      fontSize: 10,
+                      color: PdfColors.yellow600,
+                      fontWeight: pw.FontWeight.bold,
                     ),
-                    textAlign: pw.TextAlign.right,
+                  ),
+                  pw.SizedBox(height: 2),
+                  pw.Text(
+                    'Student Attendance Report',
+                    style: pw.TextStyle(
+                      fontSize: 18,
+                      color: PdfColors.white,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
                   ),
                 ],
               ),
-              pw.SizedBox(height: 8),
-              pw.Divider(thickness: 1, color: PdfColors.grey400),
-              pw.SizedBox(height: 10),
-              pw.Container(
-                padding: const pw.EdgeInsets.all(10),
-                decoration: pw.BoxDecoration(
-                  color: PdfColors.grey100,
-                  borderRadius: pw.BorderRadius.circular(6),
+            ),
+            pw.SizedBox(height: 12),
+
+            // Student + class details
+            pw.Container(
+              padding: const pw.EdgeInsets.all(10),
+              decoration: pw.BoxDecoration(
+                color: PdfColors.grey100,
+                borderRadius: pw.BorderRadius.circular(6),
+              ),
+              child: pw.Row(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Expanded(
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Text('Student',
+                            style: const pw.TextStyle(
+                                fontSize: 8, color: PdfColors.grey600)),
+                        pw.Text(safe(studentName),
+                            style: pw.TextStyle(
+                                fontSize: 11, fontWeight: pw.FontWeight.bold)),
+                        pw.SizedBox(height: 6),
+                        pw.Text('School ID',
+                            style: const pw.TextStyle(
+                                fontSize: 8, color: PdfColors.grey600)),
+                        pw.Text(safe(schoolId),
+                            style: pw.TextStyle(
+                                fontSize: 11, fontWeight: pw.FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                  pw.Expanded(
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Text('Class',
+                            style: const pw.TextStyle(
+                                fontSize: 8, color: PdfColors.grey600)),
+                        pw.Text(safe('$courseCode - $courseName'),
+                            style: pw.TextStyle(
+                                fontSize: 11, fontWeight: pw.FontWeight.bold)),
+                        pw.SizedBox(height: 6),
+                        pw.Text('Period',
+                            style: const pw.TextStyle(
+                                fontSize: 8, color: PdfColors.grey600)),
+                        pw.Text(safe(dateLabel),
+                            style: pw.TextStyle(
+                                fontSize: 11, fontWeight: pw.FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            pw.SizedBox(height: 12),
+
+            // Summary
+            pw.Row(
+              children: [
+                summaryBox('Attendance', '${rate.toStringAsFixed(0)}%',
+                    PdfColors.blue800),
+                summaryBox('Present', '$present', PdfColors.green700),
+                summaryBox('Late', '$late', PdfColors.orange700),
+                summaryBox('Excused', '$excused', PdfColors.purple700),
+                summaryBox('Absent', '$absent', PdfColors.red700),
+              ],
+            ),
+            pw.SizedBox(height: 4),
+            pw.Text(
+              'Attendance counts present, late and excused sessions out of $total.',
+              style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey600),
+            ),
+            pw.SizedBox(height: 14),
+
+            // Table (header repeats on every page, rows grow with the text)
+            pw.Table(
+              columnWidths: const {
+                0: pw.FlexColumnWidth(2.4),
+                1: pw.FlexColumnWidth(1.2),
+                2: pw.FlexColumnWidth(1.2),
+                3: pw.FlexColumnWidth(4.2),
+              },
+              border: const pw.TableBorder(
+                horizontalInside: pw.BorderSide(
+                  color: PdfColors.grey300,
+                  width: 0.5,
                 ),
-                child: pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                bottom: pw.BorderSide(color: PdfColors.grey400, width: 0.5),
+              ),
+              children: [
+                pw.TableRow(
+                  repeat: true,
+                  decoration: const pw.BoxDecoration(color: PdfColors.blue900),
                   children: [
-                    pw.Text(
-                      'Student Name: $studentName',
-                      style: pw.TextStyle(
-                        fontSize: 10,
-                        fontWeight: pw.FontWeight.bold,
-                      ),
-                    ),
-                    pw.Text(
-                      'School ID: $schoolId',
-                      style: pw.TextStyle(
-                        fontSize: 10,
-                        fontWeight: pw.FontWeight.bold,
-                      ),
-                    ),
+                    headerCell('Date'),
+                    headerCell('Time In'),
+                    headerCell('Status'),
+                    headerCell('Reason / Remarks'),
                   ],
                 ),
-              ),
-              pw.SizedBox(height: 14),
-              pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceAround,
-                children: [
-                  _pdfStatBadge(
-                    'Total Sessions',
-                    '${records.length}',
-                    PdfColors.blue800,
+                for (int i = 0; i < sorted.length; i++)
+                  pw.TableRow(
+                    decoration: pw.BoxDecoration(
+                      color: i.isOdd ? PdfColors.grey100 : PdfColors.white,
+                    ),
+                    children: [
+                      bodyCell(dateText(sorted[i])),
+                      bodyCell(timeText(sorted[i])),
+                      bodyCell(
+                        statusLabel(sorted[i]['status']?.toString() ?? ''),
+                        color:
+                            statusColor(sorted[i]['status']?.toString() ?? ''),
+                        bold: true,
+                      ),
+                      bodyCell(reasonText(sorted[i])),
+                    ],
                   ),
-                  _pdfStatBadge(
-                    'Present',
-                    '$presentCount',
-                    PdfColors.green700,
-                  ),
-                  _pdfStatBadge(
-                    'Late',
-                    '$lateCount',
-                    PdfColors.orange700,
-                  ),
-                  _pdfStatBadge(
-                    'Excused',
-                    '$excusedCount',
-                    PdfColors.purple700,
-                  ),
-                  _pdfStatBadge(
-                    'Absent',
-                    '$absentCount',
-                    PdfColors.red700,
-                  ),
-                ],
-              ),
-              pw.SizedBox(height: 16),
-              pw.TableHelper.fromTextArray(
-                headers: [
-                  'Date & Time',
-                  'Status',
-                  'Reason / Remarks',
-                ],
-                data: records.map((rec) {
-                  final session =
-                      rec['attendance_sessions'] as Map<String, dynamic>?;
-
-                  final formattedDate = _formatDateTime(
-                    rec['scanned_at'],
-                    session?['date']?.toString(),
-                  );
-
-                  final status =
-                      rec['status']?.toString().toUpperCase() ?? 'PRESENT';
-
-                  final category = rec['reason_category'];
-                  final remarks = rec['remarks'];
-
-                  String reasonText = '-';
-
-                  if (category != null &&
-                      remarks != null &&
-                      remarks.toString().isNotEmpty) {
-                    reasonText = '$category ($remarks)';
-                  } else if (category != null) {
-                    reasonText = category.toString();
-                  } else if (remarks != null && remarks.toString().isNotEmpty) {
-                    reasonText = remarks.toString();
-                  }
-
-                  return [
-                    formattedDate,
-                    status,
-                    reasonText,
-                  ];
-                }).toList(),
-                headerStyle: pw.TextStyle(
-                  fontWeight: pw.FontWeight.bold,
-                  color: PdfColors.white,
-                  fontSize: 10,
-                ),
-                headerDecoration:
-                    const pw.BoxDecoration(color: PdfColors.blue900),
-                cellStyle: const pw.TextStyle(fontSize: 9),
-                cellHeight: 24,
-                cellAlignments: {
-                  0: pw.Alignment.centerLeft,
-                  1: pw.Alignment.center,
-                  2: pw.Alignment.centerLeft,
-                },
-              ),
-            ];
-          },
+              ],
+            ),
+          ],
         ),
       );
 
-      await Printing.layoutPdf(
-        onLayout: (format) async => pdf.save(),
-        name: 'Attendance_${courseCode}_$schoolId.pdf',
+      final bytes = await doc.save();
+
+      // Opens the share / save sheet on phones and downloads on the web
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename:
+            'Attendance_${courseCode.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '')}_$schoolId.pdf',
       );
     } catch (e) {
       debugPrint('Error generating attendance PDF: $e');
@@ -579,43 +791,6 @@ class _StudentClassesScreenState extends State<StudentClassesScreen> {
         );
       }
     }
-  }
-
-  pw.Widget _pdfStatBadge(
-    String label,
-    String value,
-    PdfColor color,
-  ) {
-    return pw.Container(
-      padding: const pw.EdgeInsets.symmetric(
-        horizontal: 14,
-        vertical: 8,
-      ),
-      decoration: pw.BoxDecoration(
-        border: pw.Border.all(color: color, width: 1),
-        borderRadius: pw.BorderRadius.circular(6),
-      ),
-      child: pw.Column(
-        children: [
-          pw.Text(
-            value,
-            style: pw.TextStyle(
-              fontSize: 13,
-              fontWeight: pw.FontWeight.bold,
-              color: color,
-            ),
-          ),
-          pw.SizedBox(height: 2),
-          pw.Text(
-            label,
-            style: const pw.TextStyle(
-              fontSize: 8,
-              color: PdfColors.grey700,
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   // SUBMIT EXCUSE / REASON
