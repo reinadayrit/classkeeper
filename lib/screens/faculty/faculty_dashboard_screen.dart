@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../constants/app_colors.dart';
+import '../../services/faculty_notice_refresh.dart';
+import '../../services/schedule_utils.dart';
 
 /// Data model matching Supabase 'classes' schema
 class FacultyClassItem {
@@ -44,20 +46,29 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
   int _totalStudents = 0;
 
   // Dynamic Metrics (Active Classes Only)
-  double _avgAttendance = 0.0;
-  int _atRiskStudentsCount = 0;
-  Map<String, double> _weeklyPercentages = {
-    'Mon': 0.0,
-    'Tue': 0.0,
-    'Wed': 0.0,
-    'Thu': 0.0,
-    'Fri': 0.0,
+  double? _avgAttendance; // null = no attendance recorded yet
+  int _atRiskStudentsCount = 0; // students with 2+ absences
+  int _pendingExcuseCount = 0; // excuse letters waiting for review
+  int _openSessionCount = 0; // attendance sessions not ended yet
+
+  // Attendance rate per class: {code, title, rate, attended, total}
+  List<Map<String, dynamic>> _classRates = [];
+
+  // Attendance rate per weekday (null = no sessions on that day)
+  Map<String, double?> _weeklyPercentages = {
+    'Mon': null,
+    'Tue': null,
+    'Wed': null,
+    'Thu': null,
+    'Fri': null,
   };
 
   // Up Next scheduled class variables
   String _nextClassCode = 'N/A';
   String _nextClassTitle = 'No upcoming class scheduled';
   String _nextClassSchedule = 'N/A';
+  String _nextClassWhen = ''; // e.g. "Today, 8:00 AM"
+  bool _nextIsReal = false; // false = schedule could not be read
 
   // Classes Pagination State
   final PageController _classPageController = PageController();
@@ -67,10 +78,13 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
   void initState() {
     super.initState();
     _fetchDashboardData();
+    // Refresh the counts when an excuse letter is approved or rejected
+    FacultyNoticeRefresh.tick.addListener(_fetchDashboardData);
   }
 
   @override
   void dispose() {
+    FacultyNoticeRefresh.tick.removeListener(_fetchDashboardData);
     _classPageController.dispose();
     super.dispose();
   }
@@ -128,13 +142,25 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
         );
       }
 
-      // 3. Set "Up Next" class values (First Active Class)
+      // 3. "Up Next": the class that meets next, based on the schedule text
       if (classesResponse.isNotEmpty) {
-        final nextClass = classesResponse.first;
+        final schedules = (classesResponse as List)
+            .map((c) => (c['schedule'] ?? '').toString())
+            .toList();
+        final next = ScheduleUtils.nextOccurrence(schedules);
+
+        // If no schedule can be read, fall back to the first class
+        final nextClass =
+            next != null ? classesResponse[next.index] : classesResponse.first;
+
+        _nextIsReal = next != null;
+        _nextClassWhen = next != null ? ScheduleUtils.whenLabel(next) : '';
         _nextClassCode = nextClass['course_code'] ?? 'COURSE';
         _nextClassTitle = nextClass['course_name'] ?? 'Scheduled Class';
         _nextClassSchedule = nextClass['schedule'] ?? 'Schedule not set';
       } else {
+        _nextIsReal = false;
+        _nextClassWhen = '';
         _nextClassCode = 'N/A';
         _nextClassTitle = 'No active class scheduled';
         _nextClassSchedule = 'N/A';
@@ -144,6 +170,10 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
       int totalLogs = 0;
       int presentOrLateCount = 0;
       final Map<String, int> studentAbsentCounts = {};
+      int openSessions = 0;
+      int pendingExcuses = 0;
+      final Map<String, List<int>> perClassCounts =
+          {}; // id -> [attended, total]
       final Map<int, List<int>> weekdayCounters = {
         1: [0, 0], // Mon: [present/late count, total count]
         2: [0, 0], // Tue
@@ -155,20 +185,37 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
       if (activeClassIds.isNotEmpty) {
         final sessionsRes = await _supabase
             .from('attendance_sessions')
-            .select('id, created_at')
+            .select('id, class_id, created_at, date, is_ended')
             .inFilter('class_id', activeClassIds);
 
         final Map<String, DateTime> sessionDateMap = {};
+        final Map<String, String> sessionClassMap = {};
         final List<String> sessionIds = [];
 
         for (var s in sessionsRes) {
           final sId = s['id'].toString();
           sessionIds.add(sId);
-          if (s['created_at'] != null) {
-            sessionDateMap[sId] =
-                DateTime.tryParse(s['created_at'].toString())?.toLocal() ??
-                    DateTime.now();
-          }
+          sessionClassMap[sId] = s['class_id']?.toString() ?? '';
+          if (s['is_ended'] == false) openSessions++;
+
+          // Use the session date (same as the Records screen)
+          final DateTime? parsed =
+              DateTime.tryParse(s['date']?.toString() ?? '') ??
+                  DateTime.tryParse(s['created_at']?.toString() ?? '')
+                      ?.toLocal();
+          if (parsed != null) sessionDateMap[sId] = parsed;
+        }
+
+        // Excuse letters waiting for the teacher
+        try {
+          final pendingRes = await _supabase
+              .from('absence_reasons')
+              .select('id')
+              .inFilter('class_id', activeClassIds)
+              .ilike('status', 'pending');
+          pendingExcuses = (pendingRes as List).length;
+        } catch (e) {
+          debugPrint('Could not count excuse letters: $e');
         }
 
         if (sessionIds.isNotEmpty) {
@@ -183,6 +230,14 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
             final studentId = rec['student_id']?.toString() ?? '';
             final sessionId = rec['session_id']?.toString() ?? '';
             final sessionDate = sessionDateMap[sessionId];
+
+            // Per-class totals
+            final classKey = sessionClassMap[sessionId] ?? '';
+            if (classKey.isNotEmpty) {
+              final c = perClassCounts.putIfAbsent(classKey, () => [0, 0]);
+              c[1]++;
+              if (statusStr != 'absent') c[0]++;
+            }
 
             if (statusStr == 'present' ||
                 statusStr == 'late' ||
@@ -209,39 +264,54 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
         }
       }
 
-      // Average attendance calculation (Active classes only)
-      final double calculatedAvg =
-          totalLogs > 0 ? (presentOrLateCount / totalLogs) * 100 : 100.0;
+      // Average attendance (present + late + excused), same as Records.
+      // null when nothing has been recorded yet.
+      final double? calculatedAvg =
+          totalLogs > 0 ? (presentOrLateCount / totalLogs) * 100 : null;
 
-      // Count students missing 3+ active class sessions
+      // Students with 2 or more absences (same rule as the Records screen)
       final int atRisk =
-          studentAbsentCounts.values.where((cnt) => cnt >= 3).length;
+          studentAbsentCounts.values.where((cnt) => cnt >= 2).length;
 
-      // Dynamic weekly breakdown percentages
-      final Map<String, double> computedWeekly = {
-        'Mon': weekdayCounters[1]![1] > 0
-            ? weekdayCounters[1]![0] / weekdayCounters[1]![1]
-            : 0.85,
-        'Tue': weekdayCounters[2]![1] > 0
-            ? weekdayCounters[2]![0] / weekdayCounters[2]![1]
-            : 0.90,
-        'Wed': weekdayCounters[3]![1] > 0
-            ? weekdayCounters[3]![0] / weekdayCounters[3]![1]
-            : 0.88,
-        'Thu': weekdayCounters[4]![1] > 0
-            ? weekdayCounters[4]![0] / weekdayCounters[4]![1]
-            : 0.92,
-        'Fri': weekdayCounters[5]![1] > 0
-            ? weekdayCounters[5]![0] / weekdayCounters[5]![1]
-            : 0.80,
+      // Attendance rate per weekday, only for days that have sessions
+      double? dayRate(int weekday) {
+        final counts = weekdayCounters[weekday]!;
+        return counts[1] > 0 ? counts[0] / counts[1] : null;
+      }
+
+      final Map<String, double?> computedWeekly = {
+        'Mon': dayRate(1),
+        'Tue': dayRate(2),
+        'Wed': dayRate(3),
+        'Thu': dayRate(4),
+        'Fri': dayRate(5),
       };
+
+      // Attendance rate per class (lowest first)
+      final List<Map<String, dynamic>> classRates = [];
+      for (final c in loadedClasses) {
+        final counts = perClassCounts[c.id];
+        if (counts == null || counts[1] == 0) continue;
+        classRates.add({
+          'code': c.code,
+          'title': c.title,
+          'attended': counts[0],
+          'total': counts[1],
+          'rate': counts[0] / counts[1],
+        });
+      }
+      classRates
+          .sort((a, b) => (a['rate'] as double).compareTo(b['rate'] as double));
 
       if (mounted) {
         setState(() {
+          _classRates = classRates;
           _classList = loadedClasses;
           _totalStudents = aggregateStudents;
           _avgAttendance = calculatedAvg;
           _atRiskStudentsCount = atRisk;
+          _pendingExcuseCount = pendingExcuses;
+          _openSessionCount = openSessions;
           _weeklyPercentages = computedWeekly;
           _isLoading = false;
         });
@@ -419,7 +489,9 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(
-                                'UP NEXT • $_nextClassCode',
+                                _nextIsReal
+                                    ? 'UP NEXT • $_nextClassCode'
+                                    : 'YOUR CLASS • $_nextClassCode',
                                 style: GoogleFonts.poppins(
                                   fontSize: 10,
                                   fontWeight: FontWeight.bold,
@@ -437,7 +509,9 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
                                 ),
                               ),
                               Text(
-                                _nextClassSchedule,
+                                _nextClassWhen.isNotEmpty
+                                    ? '$_nextClassWhen  •  $_nextClassSchedule'
+                                    : _nextClassSchedule,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: GoogleFonts.poppins(
@@ -491,18 +565,28 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
                   const SizedBox(height: 12),
                   _buildQuickActions(),
                   const SizedBox(height: 24),
-                  _buildSectionTitle('METRICS & USAGE'),
+                  _buildSectionTitle('OVERVIEW'),
                   const SizedBox(height: 12),
                   _buildUsageProgressCards(),
                   const SizedBox(height: 24),
-                  _buildSectionTitle('ATTENTION REQUIRED'),
+                  _buildSectionTitle("TODAY'S SCHEDULE"),
+                  const SizedBox(height: 12),
+                  _buildTodaySchedule(),
+                  const SizedBox(height: 24),
+                  _buildSectionTitle('NEEDS ATTENTION'),
                   const SizedBox(height: 12),
                   _buildAttentionCard(context),
                   const SizedBox(height: 24),
-                  _buildSectionTitle('ATTENDANCE ANALYTICS'),
+                  _buildSectionTitle('ATTENDANCE BY DAY'),
                   const SizedBox(height: 12),
                   _buildAnalyticsCard(context),
                   const SizedBox(height: 24),
+                  if (_classRates.isNotEmpty) ...[
+                    _buildSectionTitle('ATTENDANCE BY CLASS'),
+                    const SizedBox(height: 12),
+                    _buildClassRatesCard(),
+                    const SizedBox(height: 24),
+                  ],
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -581,134 +665,56 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
   }
 
   Widget _buildUsageProgressCards() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: Column(
-        children: [
-          _buildUsageLineItem(
-            icon: Icons.groups_rounded,
-            title: 'Total Enrolled Students',
-            currentValue: '$_totalStudents Students',
-            totalValue: '320 Capacity',
-            progressRatio: (_totalStudents / 320).clamp(0.0, 1.0),
-          ),
-          const SizedBox(height: 16),
-          const Divider(height: 1),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: _buildMiniProgressMetric(
-                  icon: Icons.class_rounded,
-                  title: 'Active Classes',
-                  valueStr: '${_classList.length} Courses',
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildMiniProgressMetric(
-                  icon: Icons.pie_chart_rounded,
-                  title: 'Avg Attendance',
-                  valueStr: '${_avgAttendance.toStringAsFixed(1)}% Present',
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
+    final String avgText =
+        _avgAttendance == null ? '—' : '${_avgAttendance!.toStringAsFixed(1)}%';
 
-  Widget _buildUsageLineItem({
-    required IconData icon,
-    required String title,
-    required String currentValue,
-    required String totalValue,
-    required double progressRatio,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Row(
       children: [
-        Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: const Color(0xFFEFF6FF),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(
-                Icons.groups_rounded,
-                color: AppColors.primaryBlue,
-                size: 20,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Text(
-              title,
-              style: GoogleFonts.poppins(
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF0F172A),
-              ),
-            ),
-          ],
+        Expanded(
+          child: _buildStatTile(
+            icon: Icons.groups_rounded,
+            label: 'Students',
+            value: '$_totalStudents',
+            caption: 'enrolled',
+          ),
         ),
-        const SizedBox(height: 10),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              currentValue,
-              style: GoogleFonts.poppins(
-                fontSize: 11,
-                fontWeight: FontWeight.bold,
-                color: AppColors.primaryBlue,
-              ),
-            ),
-            Text(
-              totalValue,
-              style: GoogleFonts.poppins(
-                fontSize: 11,
-                color: Colors.grey.shade500,
-              ),
-            ),
-          ],
+        const SizedBox(width: 10),
+        Expanded(
+          child: _buildStatTile(
+            icon: Icons.class_rounded,
+            label: 'Classes',
+            value: '${_classList.length}',
+            caption: 'active',
+          ),
         ),
-        const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: LinearProgressIndicator(
-            value: progressRatio,
-            minHeight: 8,
-            backgroundColor: Colors.grey.shade100,
-            valueColor: const AlwaysStoppedAnimation<Color>(
-              AppColors.primaryBlue,
-            ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _buildStatTile(
+            icon: Icons.pie_chart_rounded,
+            label: 'Attendance',
+            value: avgText,
+            caption: _avgAttendance == null ? 'no records yet' : 'average',
           ),
         ),
       ],
     );
   }
 
-  Widget _buildMiniProgressMetric({
+  Widget _buildStatTile({
     required IconData icon,
-    required String title,
-    required String valueStr,
+    required String label,
+    required String value,
+    required String caption,
   }) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(14),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.grey.shade200),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
             padding: const EdgeInsets.all(6),
@@ -716,31 +722,34 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
               color: const Color(0xFFEFF6FF),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: Icon(icon, color: const Color(0xFF2563EB), size: 18),
+            child: Icon(icon, color: AppColors.primaryBlue, size: 18),
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: GoogleFonts.poppins(
-                    fontSize: 10,
-                    color: Colors.grey.shade600,
-                  ),
-                ),
-                Text(
-                  valueStr,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.primaryBlue,
-                  ),
-                ),
-              ],
+          const SizedBox(height: 10),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              style: GoogleFonts.poppins(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: const Color(0xFF0F172A),
+              ),
+            ),
+          ),
+          Text(
+            label,
+            style: GoogleFonts.poppins(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: const Color(0xFF334155),
+            ),
+          ),
+          Text(
+            caption,
+            style: GoogleFonts.poppins(
+              fontSize: 9.5,
+              color: Colors.grey.shade500,
             ),
           ),
         ],
@@ -748,53 +757,306 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
     );
   }
 
+  /// Things the teacher can act on, with real counts.
   Widget _buildAttentionCard(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14.0),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFEF2F2),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFFCA5A5)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: const Color(0xFFEF4444).withValues(alpha: 0.15),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.warning_amber_rounded,
-              color: Color(0xFFDC2626),
-              size: 20,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Absence Alerts',
+    Widget row({
+      required IconData icon,
+      required Color color,
+      required String text,
+      required int tab,
+    }) {
+      return InkWell(
+        onTap: () => widget.onTabSelected(tab),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: color, size: 18),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  text,
                   style: GoogleFonts.poppins(
                     fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: const Color(0xFF991B1B),
+                    fontWeight: FontWeight.w500,
+                    color: const Color(0xFF1E293B),
                   ),
                 ),
-                Text(
-                  _atRiskStudentsCount > 0
-                      ? '$_atRiskStudentsCount student(s) missing 3+ sessions will automatically trigger alerts.'
-                      : 'Students missing 3+ sessions will automatically trigger alerts.',
-                  style: GoogleFonts.poppins(
-                    fontSize: 11,
-                    color: const Color(0xFFB91C1C),
+              ),
+              Icon(Icons.chevron_right_rounded,
+                  color: Colors.grey.shade400, size: 20),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final rows = <Widget>[
+      if (_pendingExcuseCount > 0)
+        row(
+          icon: Icons.mark_email_unread_outlined,
+          color: const Color(0xFFF59E0B),
+          text:
+              '$_pendingExcuseCount excuse letter${_pendingExcuseCount == 1 ? '' : 's'} waiting for review',
+          tab: 3,
+        ),
+      if (_atRiskStudentsCount > 0)
+        row(
+          icon: Icons.person_off_outlined,
+          color: const Color(0xFFEF4444),
+          text:
+              '$_atRiskStudentsCount student${_atRiskStudentsCount == 1 ? '' : 's'} with 2 or more absences',
+          tab: 3,
+        ),
+      if (_openSessionCount > 0)
+        row(
+          icon: Icons.qr_code_2_rounded,
+          color: AppColors.primaryBlue,
+          text:
+              '$_openSessionCount attendance session${_openSessionCount == 1 ? '' : 's'} still open',
+          tab: 2,
+        ),
+    ];
+
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.symmetric(
+        horizontal: 14,
+        vertical: rows.isEmpty ? 14 : 6,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: rows.isEmpty
+          ? Row(
+              children: [
+                Icon(Icons.check_circle_outline_rounded,
+                    color: Colors.green.shade500, size: 22),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    "You're all caught up. No excuse letters to review, no at-risk students and no open sessions.",
+                    style: GoogleFonts.poppins(
+                      fontSize: 11.5,
+                      color: Colors.grey.shade700,
+                      height: 1.4,
+                    ),
                   ),
                 ),
               ],
+            )
+          : Column(
+              children: [
+                for (int i = 0; i < rows.length; i++) ...[
+                  rows[i],
+                  if (i != rows.length - 1)
+                    Divider(height: 1, color: Colors.grey.shade200),
+                ],
+              ],
             ),
-          ),
+    );
+  }
+
+  /// Classes that meet today, worked out from each class schedule.
+  Widget _buildTodaySchedule() {
+    int startMinutes(FacultyClassItem c) {
+      final t = ScheduleUtils.parseStartTime(c.schedule);
+      return t == null ? 0 : t.hour * 60 + t.minute;
+    }
+
+    final int today = DateTime.now().weekday;
+    final todays = _classList
+        .where((c) => ScheduleUtils.parseWeekdays(c.schedule).contains(today))
+        .toList()
+      ..sort((a, b) => startMinutes(a).compareTo(startMinutes(b)));
+
+    if (todays.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.grey.shade200),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.event_available_rounded,
+                color: Colors.grey.shade400, size: 22),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                _nextIsReal
+                    ? 'No classes today. Next: $_nextClassCode ($_nextClassWhen)'
+                    : 'No classes scheduled for today.',
+                style: GoogleFonts.poppins(
+                  fontSize: 11.5,
+                  color: Colors.grey.shade700,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        children: [
+          for (int i = 0; i < todays.length; i++) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Row(
+                children: [
+                  Container(
+                    width: 4,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: AppColors.primaryBlue,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${todays[i].code}  •  ${todays[i].title}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: const Color(0xFF1E293B),
+                          ),
+                        ),
+                        Text(
+                          '${todays[i].schedule}  •  ${todays[i].enrolledCount}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.poppins(
+                            fontSize: 10.5,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    onPressed: () => widget.onTabSelected(2),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: AppColors.primaryBlue),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    child: Text(
+                      'Start QR',
+                      style: GoogleFonts.poppins(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.primaryBlue,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (i != todays.length - 1)
+              Divider(height: 1, color: Colors.grey.shade200),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Attendance rate for each class (lowest first). Tap to open Records.
+  Widget _buildClassRatesCard() {
+    Color colorFor(double r) {
+      if (r >= 0.85) return const Color(0xFF10B981);
+      if (r >= 0.70) return const Color(0xFFF59E0B);
+      return const Color(0xFFEF4444);
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        children: [
+          for (int i = 0; i < _classRates.length; i++) ...[
+            InkWell(
+              onTap: () => widget.onTabSelected(3),
+              borderRadius: BorderRadius.circular(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${_classRates[i]['code']}',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: const Color(0xFF1E293B),
+                          ),
+                        ),
+                      ),
+                      Text(
+                        '${((_classRates[i]['rate'] as double) * 100).round()}%',
+                        style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: colorFor(_classRates[i]['rate'] as double),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: LinearProgressIndicator(
+                      value: _classRates[i]['rate'] as double,
+                      minHeight: 8,
+                      backgroundColor: Colors.grey.shade100,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        colorFor(_classRates[i]['rate'] as double),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (i != _classRates.length - 1) const SizedBox(height: 14),
+          ],
         ],
       ),
     );
@@ -814,13 +1076,25 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'Weekly Attendance Overview',
-                style: GoogleFonts.poppins(
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold,
-                  color: const Color(0xFF1E293B),
-                ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Attendance by Day',
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFF1E293B),
+                    ),
+                  ),
+                  Text(
+                    'Present, late or excused, across all sessions',
+                    style: GoogleFonts.poppins(
+                      fontSize: 10,
+                      color: Colors.grey.shade500,
+                    ),
+                  ),
+                ],
               ),
               const Icon(
                 Icons.bar_chart_rounded,
@@ -835,15 +1109,15 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               _BarChartColumn(
-                  day: 'Mon', percentage: _weeklyPercentages['Mon']!),
+                  day: 'Mon', percentage: _weeklyPercentages['Mon']),
               _BarChartColumn(
-                  day: 'Tue', percentage: _weeklyPercentages['Tue']!),
+                  day: 'Tue', percentage: _weeklyPercentages['Tue']),
               _BarChartColumn(
-                  day: 'Wed', percentage: _weeklyPercentages['Wed']!),
+                  day: 'Wed', percentage: _weeklyPercentages['Wed']),
               _BarChartColumn(
-                  day: 'Thu', percentage: _weeklyPercentages['Thu']!),
+                  day: 'Thu', percentage: _weeklyPercentages['Thu']),
               _BarChartColumn(
-                  day: 'Fri', percentage: _weeklyPercentages['Fri']!),
+                  day: 'Fri', percentage: _weeklyPercentages['Fri']),
             ],
           ),
         ],
@@ -1045,7 +1319,7 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
 
 class _BarChartColumn extends StatelessWidget {
   final String day;
-  final double percentage;
+  final double? percentage; // null = no sessions on that day
 
   const _BarChartColumn({
     required this.day,
@@ -1054,12 +1328,13 @@ class _BarChartColumn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final int displayPct = (percentage * 100).toInt();
+    final double? p = percentage;
+    final String label = p == null ? '—' : '${(p * 100).round()}%';
 
     return Column(
       children: [
         Text(
-          '$displayPct%',
+          label,
           style: GoogleFonts.poppins(
             fontSize: 9,
             color: Colors.grey.shade600,
@@ -1075,15 +1350,17 @@ class _BarChartColumn extends StatelessWidget {
             borderRadius: BorderRadius.circular(6),
           ),
           alignment: Alignment.bottomCenter,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
-            height: (50 * percentage.clamp(0.05, 1.0)),
-            width: 12,
-            decoration: BoxDecoration(
-              color: AppColors.primaryBlue,
-              borderRadius: BorderRadius.circular(6),
-            ),
-          ),
+          child: p == null
+              ? null
+              : AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
+                  height: 50 * p.clamp(0.05, 1.0),
+                  width: 12,
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryBlue,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                ),
         ),
         const SizedBox(height: 6),
         Text(
