@@ -309,7 +309,7 @@ class _StudentQrScreenState extends State<StudentQrScreen> {
           );
 
       if (enrollment == null) {
-        final courseCode = classData['course_code']?.toString() ?? 'this class';
+        final courseCode = classData['course_name']?.toString() ?? 'this class';
 
         throw Exception(
           'Access Denied: You are not enrolled in $courseCode.',
