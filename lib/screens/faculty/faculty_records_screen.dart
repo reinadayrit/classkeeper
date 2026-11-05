@@ -467,6 +467,7 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
         id,
         () => {
           'name': (r['profiles']?['full_name'] ?? 'Unknown').toString(),
+          'school_id': (r['profiles']?['school_id'] ?? '').toString(),
           'total': 0,
           'late': 0,
           'absent': 0,
@@ -3516,6 +3517,7 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
           ],
         ),
         const SizedBox(height: 20),
+        _buildQuickFactsCard(),
         _buildOutlookCard(atRiskList.length),
         const SizedBox(height: 20),
         _buildTrendCard(),
@@ -3895,6 +3897,8 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
               ],
             ),
           ),
+        _buildSessionRatesCard(),
+        _buildExcuseSummaryCard(),
         _buildHighlightsCard(),
       ],
     );
@@ -4261,93 +4265,160 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
     );
   }
 
-  Widget _buildHighlightsCard() {
-    final stats = _studentStats.values.toList();
+  // ---------------------------------------------------------------
+  // QUICK FACTS, SESSIONS, EXCUSE LETTERS, STUDENT HIGHLIGHTS
+  // ---------------------------------------------------------------
 
-    final perfect = stats
-        .where((e) =>
-            (e['total'] as int) >= 3 &&
-            e['late'] == 0 &&
-            e['absent'] == 0 &&
-            e['excused'] == 0)
-        .toList()
-      ..sort((a, b) => (b['total'] as int).compareTo(a['total'] as int));
+  Widget _buildQuickFactsCard() {
+    final recs = _filteredRecords;
+    if (recs.isEmpty) return const SizedBox.shrink();
 
-    final lateOften = stats.where((e) => (e['late'] as int) >= 2).toList()
-      ..sort((a, b) => (b['late'] as int).compareTo(a['late'] as int));
+    final Set<String> sessions = {};
+    final Set<String> students = {};
+    int late = 0, absent = 0;
 
-    if (perfect.isEmpty && lateOften.isEmpty) return const SizedBox.shrink();
+    for (final r in recs) {
+      final sid = r['attendance_sessions']?['id']?.toString() ?? '';
+      if (sid.isNotEmpty) sessions.add(sid);
+      final pid = r['profiles']?['id']?.toString() ?? '';
+      if (pid.isNotEmpty) students.add(pid);
 
-    Widget section({
-      required String title,
-      required IconData icon,
-      required Color color,
-      required List<Map<String, dynamic>> people,
-      required String Function(Map<String, dynamic>) trailingText,
-    }) {
+      final st = r['status']?.toString().toLowerCase();
+      if (st == 'late') late++;
+      if (st == 'absent') absent++;
+    }
+
+    Widget fact(String value, String label, Color color) {
+      return Expanded(
+        child: Column(
+          children: [
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                value,
+                style: GoogleFonts.poppins(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style: GoogleFonts.poppins(
+                fontSize: 9.5,
+                color: Colors.grey.shade600,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: _analyticsCardShell(
+        title: 'Quick Facts',
+        subtitle: 'For the records currently shown',
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            fact('${sessions.length}', 'Sessions held', AppColors.primaryBlue),
+            fact('${students.length}', 'Students', AppColors.primaryBlue),
+            fact('${(late / recs.length * 100).toStringAsFixed(0)}%',
+                'Late rate', const Color(0xFFF59E0B)),
+            fact('${(absent / recs.length * 100).toStringAsFixed(0)}%',
+                'Absent rate', const Color(0xFFEF4444)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Sessions with the lowest and highest attendance.
+  Widget _buildSessionRatesCard() {
+    final Map<String, Map<String, dynamic>> sessions = {};
+
+    for (final r in _filteredRecords) {
+      final sid = r['attendance_sessions']?['id']?.toString() ?? '';
+      if (sid.isEmpty) continue;
+
+      final entry = sessions.putIfAbsent(
+        sid,
+        () => {
+          'date': (r['attendance_sessions']?['date'] ?? '').toString(),
+          'code': (r['attendance_sessions']?['classes']?['course_code'] ?? '')
+              .toString(),
+          'good': 0,
+          'total': 0,
+        },
+      );
+
+      entry['total'] = (entry['total'] as int) + 1;
+      final st = r['status']?.toString().toLowerCase();
+      if (st != 'absent') entry['good'] = (entry['good'] as int) + 1;
+    }
+
+    if (sessions.length < 2) return const SizedBox.shrink();
+
+    final list = sessions.values.map((e) {
+      return {
+        ...e,
+        'rate': (e['total'] as int) == 0
+            ? 0.0
+            : (e['good'] as int) / (e['total'] as int),
+      };
+    }).toList()
+      ..sort((a, b) => (a['rate'] as double).compareTo(b['rate'] as double));
+
+    final int n = list.length >= 6 ? 3 : (list.length >= 4 ? 2 : 1);
+    final lowest = list.take(n).toList();
+    final highest = list.reversed.take(n).toList();
+
+    String dateLabel(String iso) {
+      final d = DateTime.tryParse(iso);
+      return d == null ? iso : '${d.month}/${d.day}/${d.year}';
+    }
+
+    Widget group(String title, Color color, List<Map<String, dynamic>> items) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(icon, size: 15, color: color),
-              const SizedBox(width: 6),
-              Text(
-                '$title (${people.length})',
-                style: GoogleFonts.poppins(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.grey.shade800,
-                ),
-              ),
-            ],
+          Text(
+            title,
+            style: GoogleFonts.poppins(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
           ),
-          const SizedBox(height: 8),
-          if (people.isEmpty)
-            Text(
-              'None for this period.',
-              style: GoogleFonts.poppins(
-                fontSize: 10.5,
-                color: Colors.grey.shade500,
-              ),
-            )
-          else
-            ...people.take(5).map(
-                  (p) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 3),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            p['name'].toString(),
-                            overflow: TextOverflow.ellipsis,
-                            style: GoogleFonts.poppins(
-                              fontSize: 11,
-                              color: Colors.grey.shade800,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          trailingText(p),
-                          style: GoogleFonts.poppins(
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w600,
-                            color: color,
-                          ),
-                        ),
-                      ],
+          const SizedBox(height: 6),
+          for (final e in items)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${dateLabel(e['date'].toString())}  •  ${e['code']}',
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        color: Colors.grey.shade800,
+                      ),
                     ),
                   ),
-                ),
-          if (people.length > 5)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                '+ ${people.length - 5} more',
-                style: GoogleFonts.poppins(
-                  fontSize: 10,
-                  color: Colors.grey.shade500,
-                ),
+                  Text(
+                    '${e['good']}/${e['total']}  '
+                    '${((e['rate'] as double) * 100).toStringAsFixed(0)}%',
+                    style: GoogleFonts.poppins(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w600,
+                      color: color,
+                    ),
+                  ),
+                ],
               ),
             ),
         ],
@@ -4357,33 +4428,528 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
     return Padding(
       padding: const EdgeInsets.only(top: 20),
       child: _analyticsCardShell(
-        title: 'Student Highlights',
-        subtitle: 'Based on the records shown above',
-        trailing: const Icon(Icons.people_alt_outlined,
+        title: 'Session Attendance',
+        subtitle: 'Attendance rate per session (present, late or excused)',
+        trailing: const Icon(Icons.event_note_rounded,
             size: 18, color: AppColors.primaryBlue),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            section(
-              title: 'Perfect attendance',
-              icon: Icons.emoji_events_outlined,
-              color: const Color(0xFF10B981),
-              people: perfect,
-              trailingText: (p) => '${p['total']} sessions',
-            ),
-            const SizedBox(height: 16),
+            group('Lowest attendance', const Color(0xFFEF4444), lowest),
+            const SizedBox(height: 12),
             Divider(height: 1, color: Colors.grey.shade200),
-            const SizedBox(height: 14),
-            section(
-              title: 'Often late',
-              icon: Icons.access_time_rounded,
-              color: const Color(0xFFF59E0B),
-              people: lateOften,
-              trailingText: (p) => '${p['late']} times late',
+            const SizedBox(height: 12),
+            group('Highest attendance', const Color(0xFF10B981), highest),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// How many excuse letters are pending, approved or rejected.
+  Widget _buildExcuseSummaryCard() {
+    int pending = 0, approved = 0, rejected = 0;
+
+    for (final r in _filteredRecords) {
+      final letters = r['absence_reasons'] as List?;
+      if (letters == null) continue;
+      for (final l in letters) {
+        final st = (l is Map ? l['status'] : null)?.toString().toLowerCase();
+        if (st == 'pending') pending++;
+        if (st == 'approved') approved++;
+        if (st == 'rejected') rejected++;
+      }
+    }
+
+    final int total = pending + approved + rejected;
+    if (total == 0) return const SizedBox.shrink();
+
+    final int reviewed = approved + rejected;
+
+    Widget tile(String label, int value, Color color) {
+      return Expanded(
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            children: [
+              Text(
+                '$value',
+                style: GoogleFonts.poppins(
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
+              Text(
+                label,
+                style: GoogleFonts.poppins(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey.shade700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 20),
+      child: _analyticsCardShell(
+        title: 'Excuse Letters',
+        subtitle: '$total submitted by students',
+        trailing: const Icon(Icons.mark_email_read_outlined,
+            size: 18, color: AppColors.primaryBlue),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                tile('Pending', pending, const Color(0xFFF59E0B)),
+                const SizedBox(width: 8),
+                tile('Approved', approved, const Color(0xFF10B981)),
+                const SizedBox(width: 8),
+                tile('Rejected', rejected, const Color(0xFFEF4444)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              reviewed == 0
+                  ? 'No letters reviewed yet.'
+                  : '${(approved / reviewed * 100).toStringAsFixed(0)}% of reviewed letters were approved.',
+              style: GoogleFonts.poppins(
+                fontSize: 10.5,
+                color: Colors.grey.shade600,
+              ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  /// Tap a tile to see the full list of students (paginated, searchable).
+  Widget _buildHighlightsCard() {
+    final stats = _studentStats.values.toList();
+    if (stats.isEmpty) return const SizedBox.shrink();
+
+    int byName(Map<String, dynamic> a, Map<String, dynamic> b) =>
+        a['name'].toString().compareTo(b['name'].toString());
+
+    List<Map<String, dynamic>> pick(
+      bool Function(Map<String, dynamic>) test,
+      String sortKey,
+    ) {
+      final list = stats.where(test).toList()
+        ..sort((a, b) {
+          final c = (b[sortKey] as int).compareTo(a[sortKey] as int);
+          return c != 0 ? c : byName(a, b);
+        });
+      return list;
+    }
+
+    final perfect = pick(
+      (e) =>
+          (e['total'] as int) >= 3 &&
+          e['late'] == 0 &&
+          e['absent'] == 0 &&
+          e['excused'] == 0,
+      'total',
+    );
+    final lateOften = pick((e) => (e['late'] as int) >= 2, 'late');
+    final absentOften = pick((e) => (e['absent'] as int) >= 2, 'absent');
+    final excusedList = pick((e) => (e['excused'] as int) >= 1, 'excused');
+
+    Widget tile({
+      required String label,
+      required String hint,
+      required IconData icon,
+      required Color color,
+      required List<Map<String, dynamic>> people,
+      required String Function(Map<String, dynamic>) trailingText,
+    }) {
+      final bool enabled = people.isNotEmpty;
+      return InkWell(
+        onTap: enabled
+            ? () => _showStudentListSheet(
+                  title: label,
+                  subtitle: hint,
+                  icon: icon,
+                  color: color,
+                  students: people,
+                  trailingText: trailingText,
+                )
+            : null,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color:
+                enabled ? color.withValues(alpha: 0.07) : Colors.grey.shade50,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: enabled
+                  ? color.withValues(alpha: 0.25)
+                  : Colors.grey.shade200,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, size: 18, color: enabled ? color : Colors.grey),
+                  const Spacer(),
+                  if (enabled)
+                    Icon(Icons.chevron_right_rounded, size: 18, color: color),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '${people.length}',
+                style: GoogleFonts.poppins(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: enabled ? color : Colors.grey,
+                  height: 1.1,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                style: GoogleFonts.poppins(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey.shade800,
+                ),
+              ),
+              Text(
+                enabled ? 'Tap to view list' : 'None yet',
+                style: GoogleFonts.poppins(
+                  fontSize: 9.5,
+                  color: Colors.grey.shade500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 20),
+      child: _analyticsCardShell(
+        title: 'Student Highlights',
+        subtitle: 'Tap a card to see the students',
+        trailing: const Icon(Icons.people_alt_outlined,
+            size: 18, color: AppColors.primaryBlue),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: tile(
+                    label: 'Perfect attendance',
+                    hint: '3+ sessions with no late, absent or excused',
+                    icon: Icons.emoji_events_outlined,
+                    color: const Color(0xFF10B981),
+                    people: perfect,
+                    trailingText: (p) => '${p['total']} sessions',
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: tile(
+                    label: 'Often late',
+                    hint: 'Late 2 or more times',
+                    icon: Icons.access_time_rounded,
+                    color: const Color(0xFFF59E0B),
+                    people: lateOften,
+                    trailingText: (p) => '${p['late']}x late',
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: tile(
+                    label: '2+ absences',
+                    hint: 'Students at risk',
+                    icon: Icons.person_off_outlined,
+                    color: const Color(0xFFEF4444),
+                    people: absentOften,
+                    trailingText: (p) => '${p['absent']} absences',
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: tile(
+                    label: 'Excused',
+                    hint: 'Students with an excused absence',
+                    icon: Icons.verified_outlined,
+                    color: const Color(0xFF8B5CF6),
+                    people: excusedList,
+                    trailingText: (p) => '${p['excused']} excused',
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Full list of students for a highlight, with search and pagination.
+  void _showStudentListSheet({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    required List<Map<String, dynamic>> students,
+    required String Function(Map<String, dynamic>) trailingText,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        int page = 1;
+        String query = '';
+        const int perPage = 8;
+
+        return StatefulBuilder(
+          builder: (ctx, setSheet) {
+            final q = query.trim().toLowerCase();
+            final filtered = q.isEmpty
+                ? students
+                : students.where((p) {
+                    return p['name'].toString().toLowerCase().contains(q) ||
+                        p['school_id'].toString().toLowerCase().contains(q);
+                  }).toList();
+
+            final int totalPages = filtered.isEmpty
+                ? 1
+                : (filtered.length + perPage - 1) ~/ perPage;
+            if (page > totalPages) page = totalPages;
+
+            final int start = (page - 1) * perPage;
+            int end = start + perPage;
+            if (end > filtered.length) end = filtered.length;
+            final pageItems = filtered.sublist(start, end);
+
+            Widget arrow(IconData i, bool enabled, VoidCallback onTap) {
+              return InkWell(
+                onTap: enabled ? onTap : null,
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color:
+                        enabled ? AppColors.primaryBlue : Colors.grey.shade200,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    i,
+                    size: 20,
+                    color: enabled ? Colors.white : Colors.grey.shade400,
+                  ),
+                ),
+              );
+            }
+
+            return Container(
+              height: MediaQuery.of(ctx).size.height * 0.82,
+              margin: EdgeInsets.only(
+                top: 40,
+                bottom: MediaQuery.of(ctx).viewInsets.bottom,
+              ),
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.12),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(icon, color: color, size: 20),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '$title (${students.length})',
+                              style: GoogleFonts.poppins(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.primaryBlue,
+                              ),
+                            ),
+                            Text(
+                              subtitle,
+                              style: GoogleFonts.poppins(
+                                fontSize: 10.5,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        icon:
+                            const Icon(Icons.close_rounded, color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    onChanged: (v) => setSheet(() {
+                      query = v;
+                      page = 1;
+                    }),
+                    style: GoogleFonts.poppins(fontSize: 12),
+                    decoration: InputDecoration(
+                      hintText: 'Search name or school ID',
+                      hintStyle: GoogleFonts.poppins(
+                        fontSize: 12,
+                        color: Colors.grey.shade400,
+                      ),
+                      prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                      filled: true,
+                      fillColor: const Color(0xFFF4F6F9),
+                      contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: filtered.isEmpty
+                        ? Center(
+                            child: Text(
+                              'No students match your search.',
+                              style: GoogleFonts.poppins(
+                                fontSize: 12,
+                                color: Colors.grey.shade500,
+                              ),
+                            ),
+                          )
+                        : ListView.separated(
+                            itemCount: pageItems.length,
+                            separatorBuilder: (_, __) =>
+                                Divider(height: 1, color: Colors.grey.shade200),
+                            itemBuilder: (context, i) {
+                              final p = pageItems[i];
+                              return Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 10),
+                                child: Row(
+                                  children: [
+                                    SizedBox(
+                                      width: 28,
+                                      child: Text(
+                                        '${start + i + 1}',
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 11,
+                                          color: Colors.grey.shade500,
+                                        ),
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            p['name'].toString(),
+                                            overflow: TextOverflow.ellipsis,
+                                            style: GoogleFonts.poppins(
+                                              fontSize: 12.5,
+                                              fontWeight: FontWeight.w600,
+                                              color: Colors.grey.shade900,
+                                            ),
+                                          ),
+                                          if (p['school_id']
+                                              .toString()
+                                              .isNotEmpty)
+                                            Text(
+                                              p['school_id'].toString(),
+                                              style: GoogleFonts.poppins(
+                                                fontSize: 10.5,
+                                                color: Colors.grey.shade500,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                    Text(
+                                      trailingText(p),
+                                      style: GoogleFonts.poppins(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        color: color,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      arrow(
+                        Icons.chevron_left_rounded,
+                        page > 1,
+                        () => setSheet(() => page--),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        child: Text(
+                          'Page $page of $totalPages',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade800,
+                          ),
+                        ),
+                      ),
+                      arrow(
+                        Icons.chevron_right_rounded,
+                        page < totalPages,
+                        () => setSheet(() => page++),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
