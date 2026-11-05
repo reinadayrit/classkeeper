@@ -309,10 +309,10 @@ class _StudentQrScreenState extends State<StudentQrScreen> {
           );
 
       if (enrollment == null) {
-        final courseCode = classData['course_name']?.toString() ?? 'this class';
+        final courseName = classData['course_name']?.toString() ?? 'this class';
 
         throw Exception(
-          'Access Denied: You are not enrolled in $courseCode.',
+          'Access Denied: You are not enrolled in $courseName.',
         );
       }
 
@@ -475,7 +475,8 @@ class _StudentQrScreenState extends State<StudentQrScreen> {
   }) async {
     final String classId = classMatch['id'].toString();
 
-    final String courseCode = classMatch['course_code']?.toString() ?? 'Class';
+    final String courseName =
+        classMatch['course_name']?.toString() ?? 'this class';
 
     final existingEnrollment = await _supabase
         .from('class_enrollments')
@@ -492,7 +493,7 @@ class _StudentQrScreenState extends State<StudentQrScreen> {
 
     if (existingEnrollment != null) {
       _showCustomSnackBar(
-        message: 'You are already enrolled in $courseCode.',
+        message: 'You are already enrolled in $courseName.',
         backgroundColor: Colors.orange.shade800,
         icon: Icons.warning_amber_rounded,
       );
@@ -510,7 +511,7 @@ class _StudentQrScreenState extends State<StudentQrScreen> {
     );
 
     _showCustomSnackBar(
-      message: 'Enrolled in $courseCode successfully!',
+      message: 'Enrolled in $courseName successfully!',
       backgroundColor: const Color(0xFF41A564),
       icon: Icons.check_circle_outline_rounded,
     );
