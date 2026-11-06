@@ -7,6 +7,7 @@ import 'package:printing/printing.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/faculty_notice_refresh.dart';
 import '../../constants/app_colors.dart';
+import '../../widgets/analytics_ui.dart';
 
 class FacultyRecordsScreen extends StatefulWidget {
   const FacultyRecordsScreen({super.key});
@@ -191,7 +192,6 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
             absence_reasons(
               id,
               reason,
-              proof_url,
               status,
               teacher_remark
             )
@@ -294,93 +294,17 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
     });
   }
 
-  void _showProofImageModal(String proofUrl, String name) {
-    showDialog(
-      context: context,
-      builder: (ctx) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        backgroundColor: Colors.white,
-        child: Container(
-          padding: const EdgeInsets.all(18),
-          constraints: const BoxConstraints(maxWidth: 420, maxHeight: 520),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Submitted Proof • $name',
-                      style: GoogleFonts.poppins(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.primaryBlue,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close_rounded,
-                        size: 20, color: Colors.grey),
-                    onPressed: () => Navigator.pop(ctx),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: InteractiveViewer(
-                    panEnabled: true,
-                    minScale: 0.8,
-                    maxScale: 4.0,
-                    child: Image.network(
-                      proofUrl,
-                      fit: BoxFit.contain,
-                      loadingBuilder: (context, child, loadingProgress) {
-                        if (loadingProgress == null) return child;
-                        return const Center(
-                          child: CircularProgressIndicator(
-                              color: AppColors.primaryBlue),
-                        );
-                      },
-                      errorBuilder: (context, error, stackTrace) => Container(
-                        padding: const EdgeInsets.all(20),
-                        color: Colors.grey.shade100,
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.broken_image_rounded,
-                                size: 40, color: Colors.grey),
-                            const SizedBox(height: 8),
-                            Text(
-                              'Unable to load image proof.\nPlease verify file URL.',
-                              textAlign: TextAlign.center,
-                              style: GoogleFonts.poppins(
-                                  fontSize: 11, color: Colors.grey.shade600),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   // --- FORECASTING COMPUTATION ENGINE ---
+  /// Expected attendance next week = average attendance rate of the
+  /// last 3 sessions (falls back to the overall rate if there are none).
   double get _projectedNextWeekRate {
     if (_filteredRecords.isEmpty) return 0.0;
-    final current = _avgAttendanceRate;
-    final riskPenalty = (_atRiskStudentsList.length * 1.8);
-    return (current - riskPenalty).clamp(0.0, 100.0);
+    final rates = _recentSessionRates;
+    if (rates.isEmpty) return _avgAttendanceRate;
+
+    final last = rates.length > 3 ? rates.sublist(rates.length - 3) : rates;
+    final avg = last.map((e) => e.value).reduce((a, b) => a + b) / last.length;
+    return (avg * 100).clamp(0.0, 100.0);
   }
 
   int get _projectedAtRiskCount {
@@ -562,170 +486,11 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
               ],
             ),
             const SizedBox(height: 16),
-            Expanded(
-              child: records.isEmpty
-                  ? Center(
-                      child: Text(
-                        'No detailed remarks found for "$category".',
-                        style: GoogleFonts.poppins(
-                            fontSize: 12, color: Colors.grey.shade500),
-                      ),
-                    )
-                  : ListView.builder(
-                      itemCount: records.length,
-                      itemBuilder: (context, index) {
-                        final r = records[index];
-                        final profile = r['profiles'];
-                        final name = profile?['full_name'] ?? 'Unknown Student';
-                        final schoolId = profile?['school_id'] ?? 'N/A';
-                        final classInfo = r['attendance_sessions']?['classes'];
-                        final courseCode = classInfo?['course_code'] ?? 'N/A';
-                        final courseName = classInfo?['course_name'] ?? 'N/A';
-                        final section = classInfo?['section'] ?? 'N/A';
-                        final status =
-                            (r['status'] ?? 'N/A').toString().toUpperCase();
-                        final remarks = (r['remarks'] ?? '').toString().trim();
-                        final scannedAt = r['scanned_at']?.toString();
-                        final sessionDate =
-                            r['attendance_sessions']?['date']?.toString();
-                        final formattedTime =
-                            _formatDateTime(scannedAt, sessionDate);
-
-                        return Container(
-                          margin: const EdgeInsets.only(bottom: 12),
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF8FAFC),
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: Colors.grey.shade200),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text(
-                                    name,
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.primaryBlue,
-                                    ),
-                                  ),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 8, vertical: 3),
-                                    decoration: BoxDecoration(
-                                      color: status == 'ABSENT'
-                                          ? const Color(0xFFFEE2E2)
-                                          : status == 'LATE'
-                                              ? const Color(0xFFFEF3C7)
-                                              : const Color(0xFFEEF2FF),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Text(
-                                      status,
-                                      style: GoogleFonts.poppins(
-                                        fontSize: 9,
-                                        fontWeight: FontWeight.bold,
-                                        color: status == 'ABSENT'
-                                            ? const Color(0xFFEF4444)
-                                            : status == 'LATE'
-                                                ? const Color(0xFFF59E0B)
-                                                : const Color(0xFF6366F1),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              Text(
-                                'ID: $schoolId',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 10,
-                                  color: Colors.grey.shade600,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Row(
-                                children: [
-                                  const Icon(Icons.class_outlined,
-                                      size: 13, color: AppColors.primaryBlue),
-                                  const SizedBox(width: 6),
-                                  Expanded(
-                                    child: Text(
-                                      '$courseCode - $courseName (Sec $section)',
-                                      style: GoogleFonts.poppins(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w600,
-                                        color: Colors.grey.shade800,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  const Icon(Icons.access_time_rounded,
-                                      size: 13, color: AppColors.primaryBlue),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    formattedTime,
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 10,
-                                      color: Colors.grey.shade600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 10),
-                              Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(10),
-                                  border: Border.all(
-                                      color: AppColors.primaryBlue
-                                          .withValues(alpha: 0.2)),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'REMARKS / EXPLANATION:',
-                                      style: GoogleFonts.poppins(
-                                        fontSize: 9,
-                                        fontWeight: FontWeight.bold,
-                                        color: AppColors.primaryBlue,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      remarks.isNotEmpty
-                                          ? remarks
-                                          : 'No specific remarks entered.',
-                                      style: GoogleFonts.poppins(
-                                        fontSize: 11,
-                                        fontStyle: remarks.isNotEmpty
-                                            ? FontStyle.normal
-                                            : FontStyle.italic,
-                                        color: remarks.isNotEmpty
-                                            ? Colors.grey.shade800
-                                            : Colors.grey.shade400,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
+            _ReasonRecordsPager(
+              records: records,
+              pageSize: 5,
+              category: category,
+              formatDateTime: _formatDateTime,
             ),
           ],
         ),
@@ -1628,16 +1393,14 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
     return reasons;
   }
 
-  // --- PDF EXPORT ENGINE INCLUDING SUBMITTED REASONS & PROOFS ---
+  // --- COMPLETE REPORTS PDF EXPORT ---
   Future<void> _exportPDF() async {
     if (_filteredRecords.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            'No records available to export.',
-            style: GoogleFonts.poppins(fontSize: 12),
-          ),
+          content: Text('No records available to export.',
+              style: GoogleFonts.poppins(fontSize: 12)),
           backgroundColor: const Color(0xFFF59E0B),
           behavior: SnackBarBehavior.floating,
         ),
@@ -1646,679 +1409,856 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
     }
 
     try {
-      final pdf = pw.Document();
+      final records = List<Map<String, dynamic>>.from(_filteredRecords);
 
-      final brandNavy = PdfColor.fromHex('#1E3A8A');
-      final accentBlue = PdfColor.fromHex('#2563EB');
-      final lightBlueBg = PdfColor.fromHex('#EFF6FF');
-      final rowSoftBlue = PdfColor.fromHex('#F8FAFC');
-      final borderGrey = PdfColor.fromHex('#CBD5E1');
+      // Embed Unicode-capable fonts in the PDF. The default PDF fonts are
+      // limited and can render names/symbols as missing-glyph boxes.
+      final pdfRegularFont = await PdfGoogleFonts.openSansRegular();
+      final pdfBoldFont = await PdfGoogleFonts.openSansBold();
+      final pdfEmojiFont = await PdfGoogleFonts.notoColorEmoji();
+      final pdfTheme = pw.ThemeData.withFont(
+        base: pdfRegularFont,
+        bold: pdfBoldFont,
+        fontFallback: [pdfEmojiFont, pdfRegularFont],
+      );
+      final pdf = pw.Document(theme: pdfTheme);
+      final navy = PdfColor.fromHex('#1E3A8A');
+      final pale = PdfColor.fromHex('#F8FAFC');
+      final border = PdfColor.fromHex('#CBD5E1');
+      final green = PdfColor.fromHex('#059669');
+      final amber = PdfColor.fromHex('#D97706');
+      final red = PdfColor.fromHex('#DC2626');
+      final purple = PdfColor.fromHex('#4F46E5');
 
-      final statusTotal =
-          _filteredRecords.isNotEmpty ? _filteredRecords.length : 1;
-      final presentPct = ((_presentCount / statusTotal) * 100).round();
-      final latePct = ((_lateCount / statusTotal) * 100).round();
-      final excusedPct = ((_excusedCount / statusTotal) * 100).round();
-      final absentPct = ((_absentCount / statusTotal) * 100).round();
-
-      final reasons = _absenceReasonBreakdown;
-      final totalAbsences = reasons.values.fold(0, (sum, item) => sum + item);
-
-      final Map<String, List<Map<String, dynamic>>> recordsByClass = {};
-      for (var record in _filteredRecords) {
-        final classCode = record['attendance_sessions']?['classes']
-                    ?['course_code']
-                ?.toString() ??
-            'Unassigned Class';
-        recordsByClass.putIfAbsent(classCode, () => []).add(record);
+      String value(dynamic v, [String fallback = 'N/A']) {
+        final text = v?.toString().trim() ?? '';
+        return text.isEmpty ? fallback : text;
       }
 
-      final recordsWithReasons =
-          _filteredRecords.where((r) => _hasReason(r)).toList();
+      String studentName(Map<String, dynamic> r) =>
+          value(r['profiles']?['full_name']);
+      String classCode(Map<String, dynamic> r) => value(
+          r['attendance_sessions']?['classes']?['course_code'], 'Unassigned');
+      String statusOf(Map<String, dynamic> r) =>
+          value(r['status'], 'N/A').toUpperCase();
+      String dateOf(Map<String, dynamic> r) => _formatDateTime(
+            r['scanned_at']?.toString(),
+            r['attendance_sessions']?['date']?.toString(),
+          );
 
-      pdf.addPage(
-        pw.MultiPage(
-          pageFormat: PdfPageFormat.a4,
-          margin: const pw.EdgeInsets.all(28),
-          header: (pw.Context context) {
-            return pw.Column(
+      pw.Widget heading(String title, [String? subtitle]) => pw.Container(
+            width: double.infinity,
+            margin: const pw.EdgeInsets.only(top: 14, bottom: 7),
+            padding: const pw.EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+            decoration: pw.BoxDecoration(
+              color: PdfColors.white,
+              border: pw.Border(
+                left: pw.BorderSide(color: navy, width: 3),
+                bottom: pw.BorderSide(color: border, width: 0.6),
+              ),
+            ),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: [
-                pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                  crossAxisAlignment: pw.CrossAxisAlignment.end,
-                  children: [
-                    pw.Column(
-                      crossAxisAlignment: pw.CrossAxisAlignment.start,
-                      children: [
-                        pw.Text(
-                          'ClassKeeper',
+                pw.Text(title,
+                    style: pw.TextStyle(
+                        fontSize: 11,
+                        fontWeight: pw.FontWeight.bold,
+                        color: navy)),
+                if (subtitle != null)
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.only(top: 2),
+                    child: pw.Text(subtitle,
+                        style: const pw.TextStyle(
+                            fontSize: 7.5, color: PdfColors.grey700)),
+                  ),
+              ],
+            ),
+          );
+
+      pw.Widget cell(String text, {bool bold = false}) => pw.Padding(
+            padding: const pw.EdgeInsets.all(5),
+            child: pw.Text(text,
+                style: pw.TextStyle(
+                    fontSize: 7.2,
+                    fontWeight:
+                        bold ? pw.FontWeight.bold : pw.FontWeight.normal,
+                    color: PdfColors.grey900)),
+          );
+
+      pw.Widget dataTable(List<String> headers, List<List<String>> rows) {
+        final children = <pw.TableRow>[
+          pw.TableRow(
+            repeat: true,
+            decoration: pw.BoxDecoration(color: navy),
+            children: headers
+                .map((h) => pw.Padding(
+                      padding: const pw.EdgeInsets.all(6),
+                      child: pw.Text(h,
                           style: pw.TextStyle(
-                            fontSize: 22,
-                            fontWeight: pw.FontWeight.bold,
-                            color: brandNavy,
-                          ),
-                        ),
-                        pw.SizedBox(height: 2),
-                        pw.Text(
-                          _selectedView == 1
-                              ? 'CLASS ATTENDANCE REPORT'
-                              : 'ATTENDANCE LOG REPORT',
-                          style: pw.TextStyle(
-                            fontSize: 10,
-                            fontWeight: pw.FontWeight.bold,
-                            color: PdfColors.blueGrey600,
-                            letterSpacing: 1.2,
-                          ),
-                        ),
-                      ],
-                    ),
-                    pw.Column(
-                      crossAxisAlignment: pw.CrossAxisAlignment.end,
-                      children: [
-                        pw.Container(
-                          padding: const pw.EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
-                          decoration: pw.BoxDecoration(
-                            color: lightBlueBg,
-                            borderRadius: const pw.BorderRadius.all(
-                                pw.Radius.circular(6)),
-                            border:
-                                pw.Border.all(color: borderGrey, width: 0.8),
-                          ),
-                          child: pw.Text(
-                            'Class Filter: $_selectedClass',
-                            style: pw.TextStyle(
-                              fontSize: 9,
+                              fontSize: 7.5,
                               fontWeight: pw.FontWeight.bold,
-                              color: brandNavy,
+                              color: PdfColors.white)),
+                    ))
+                .toList(),
+          ),
+          ...List.generate(
+              rows.length,
+              (i) => pw.TableRow(
+                    decoration: pw.BoxDecoration(
+                        color: i.isEven ? PdfColors.white : pale),
+                    children: rows[i].map((v) => cell(v)).toList(),
+                  )),
+        ];
+        return pw.Table(
+          border: pw.TableBorder.all(color: border, width: 0.45),
+          children: children,
+        );
+      }
+
+      // Compact vector-based horizontal bar charts. These are drawn directly
+      // in the PDF (not screenshots), so they stay sharp when zoomed or printed.
+      pw.Widget pdfBarChart(
+        String title,
+        List<Map<String, dynamic>> items, {
+        double maxValue = 100,
+      }) {
+        final safeMax = maxValue <= 0 ? 1.0 : maxValue;
+        return pw.Container(
+          width: double.infinity,
+          margin: const pw.EdgeInsets.only(top: 6, bottom: 8),
+          padding: const pw.EdgeInsets.all(9),
+          decoration: pw.BoxDecoration(
+            color: PdfColors.white,
+            border: pw.Border.all(color: border, width: 0.6),
+            borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
+          ),
+          child: pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text(title,
+                  style: pw.TextStyle(
+                    fontSize: 8.5,
+                    fontWeight: pw.FontWeight.bold,
+                    color: navy,
+                  )),
+              pw.SizedBox(height: 7),
+              ...items.map((item) {
+                final label = item['label'].toString();
+                final amount = (item['value'] as num).toDouble();
+                final ratio = (amount / safeMax).clamp(0.0, 1.0).toDouble();
+                final barColor = item['color'] as PdfColor? ?? navy;
+                return pw.Padding(
+                  padding: const pw.EdgeInsets.only(bottom: 5),
+                  child: pw.Row(
+                    children: [
+                      pw.SizedBox(
+                        width: 112,
+                        child: pw.Text(label,
+                            maxLines: 2,
+                            style: const pw.TextStyle(
+                                fontSize: 7, color: PdfColors.grey800)),
+                      ),
+                      pw.SizedBox(width: 5),
+                      pw.Expanded(
+                        child: pw.Container(
+                          height: 9,
+                          decoration: pw.BoxDecoration(
+                            color: PdfColor.fromHex('#EEF2F7'),
+                            borderRadius: const pw.BorderRadius.all(
+                                pw.Radius.circular(3)),
+                          ),
+                          child: pw.Align(
+                            alignment: pw.Alignment.centerLeft,
+                            child: pw.Container(
+                              width: 270 * ratio,
+                              height: 9,
+                              decoration: pw.BoxDecoration(
+                                color: barColor,
+                                borderRadius: const pw.BorderRadius.all(
+                                    pw.Radius.circular(3)),
+                              ),
                             ),
                           ),
                         ),
-                        pw.SizedBox(height: 4),
-                        pw.Text(
-                          'Date Range: ${_getDateDisplayString()}',
-                          style: const pw.TextStyle(
-                            fontSize: 9,
-                            color: PdfColors.grey700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-                pw.SizedBox(height: 10),
-                pw.Divider(color: brandNavy, thickness: 1.5),
-                pw.SizedBox(height: 12),
-              ],
-            );
-          },
-          footer: (pw.Context context) {
-            final nowStr = DateTime.now().toString().split('.')[0];
-            return pw.Container(
-              margin: const pw.EdgeInsets.only(top: 12),
-              padding: const pw.EdgeInsets.only(top: 8),
-              decoration: const pw.BoxDecoration(
-                border: pw.Border(
-                  top: pw.BorderSide(color: PdfColors.grey300, width: 0.5),
-                ),
-              ),
-              child: pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                children: [
-                  pw.Text(
-                    'Generated on $nowStr | ClassKeeper',
-                    style: const pw.TextStyle(
-                        fontSize: 8, color: PdfColors.grey600),
-                  ),
-                  pw.Text(
-                    'Page ${context.pageNumber} of ${context.pagesCount}',
-                    style: pw.TextStyle(
-                        fontSize: 8,
-                        fontWeight: pw.FontWeight.bold,
-                        color: brandNavy),
-                  ),
-                ],
-              ),
-            );
-          },
-          build: (pw.Context context) {
-            final List<pw.Widget> widgets = [];
-
-            if (_selectedView == 1) {
-              widgets.add(
-                pw.Row(
-                  children: [
-                    _pdfMetricCard(
-                      'Avg Attendance',
-                      '${_avgAttendanceRate.toStringAsFixed(1)}%',
-                      'Present + Excused',
-                      PdfColor.fromHex('#059669'),
-                      PdfColor.fromHex('#ECFDF5'),
-                    ),
-                    pw.SizedBox(width: 8),
-                    _pdfMetricCard(
-                      'On-Time Rate',
-                      '${_onTimeRate.toStringAsFixed(1)}%',
-                      'Punctual scans',
-                      brandNavy,
-                      lightBlueBg,
-                    ),
-                    pw.SizedBox(width: 8),
-                    _pdfMetricCard(
-                      'At-Risk Students',
-                      '${_atRiskStudentsList.length}',
-                      '≥2 Absences',
-                      PdfColor.fromHex('#DC2626'),
-                      PdfColor.fromHex('#FEF2F2'),
-                    ),
-                  ],
-                ),
-              );
-              widgets.add(pw.SizedBox(height: 14));
-
-              widgets.add(
-                pw.Container(
-                  padding: const pw.EdgeInsets.all(12),
-                  decoration: pw.BoxDecoration(
-                    color: lightBlueBg,
-                    borderRadius:
-                        const pw.BorderRadius.all(pw.Radius.circular(8)),
-                    border: pw.Border.all(color: accentBlue, width: 0.8),
-                  ),
-                  child: pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.start,
-                    children: [
-                      pw.Text(
-                        'NEXT WEEK OUTLOOK (ESTIMATE)',
-                        style: pw.TextStyle(
-                          fontSize: 10,
-                          fontWeight: pw.FontWeight.bold,
-                          color: brandNavy,
-                        ),
                       ),
-                      pw.SizedBox(height: 8),
-                      pw.Row(
-                        children: [
-                          _pdfMetricCard(
-                            'Expected Rate',
-                            '${_projectedNextWeekRate.toStringAsFixed(1)}%',
-                            _forecastRiskLevel,
-                            _projectedNextWeekRate >= 80
-                                ? PdfColor.fromHex('#059669')
-                                : PdfColor.fromHex('#DC2626'),
-                            PdfColors.white,
+                      pw.SizedBox(width: 6),
+                      pw.SizedBox(
+                        width: 42,
+                        child: pw.Text(
+                          item['percent'] == true
+                              ? '${amount.toStringAsFixed(1)}%'
+                              : amount.toInt().toString(),
+                          textAlign: pw.TextAlign.right,
+                          style: pw.TextStyle(
+                            fontSize: 7,
+                            fontWeight: pw.FontWeight.bold,
+                            color: PdfColors.grey800,
                           ),
-                          pw.SizedBox(width: 8),
-                          _pdfMetricCard(
-                            'Possible At-Risk',
-                            '$_projectedAtRiskCount Students',
-                            'Based on current absences',
-                            PdfColor.fromHex('#D97706'),
-                            PdfColors.white,
-                          ),
-                        ],
-                      ),
-                      pw.SizedBox(height: 8),
-                      pw.Text(
-                        'Follow-up: check in with students who already have 1 absence before the next session, and talk to students with 2 or more absences. This is a simple estimate based on the records in this report.',
-                        style: const pw.TextStyle(
-                          fontSize: 7.5,
-                          color: PdfColors.blueGrey800,
                         ),
                       ),
                     ],
                   ),
-                ),
-              );
-              widgets.add(pw.SizedBox(height: 14));
+                );
+              }),
+            ],
+          ),
+        );
+      }
 
-              widgets.add(
-                pw.Row(
+      final total = records.length;
+      final present = records
+          .where((r) => r['status']?.toString().toLowerCase() == 'present')
+          .length;
+      final late = records
+          .where((r) => r['status']?.toString().toLowerCase() == 'late')
+          .length;
+      final excused = records
+          .where((r) => r['status']?.toString().toLowerCase() == 'excused')
+          .length;
+      final absent = records
+          .where((r) => r['status']?.toString().toLowerCase() == 'absent')
+          .length;
+      final attended = present + late + excused;
+      final attendanceRate = total == 0 ? 0.0 : attended / total * 100;
+      final onTimeRate = total == 0 ? 0.0 : present / total * 100;
+
+      final uniqueStudents = <String>{
+        for (final r in records)
+          if (r['profiles']?['id'] != null) r['profiles']['id'].toString()
+      };
+      final uniqueSessions = <String>{
+        for (final r in records)
+          if (r['attendance_sessions']?['id'] != null)
+            r['attendance_sessions']['id'].toString()
+      };
+
+      final Map<String, List<Map<String, dynamic>>> recordsByClass = {};
+      final Map<String, List<Map<String, dynamic>>> recordsByDate = {};
+      final Map<String, Map<String, dynamic>> sessions = {};
+      for (final r in records) {
+        recordsByClass.putIfAbsent(classCode(r), () => []).add(r);
+        final rawDate =
+            r['attendance_sessions']?['date']?.toString().split('T').first ??
+                '';
+        if (rawDate.isNotEmpty) {
+          recordsByDate.putIfAbsent(rawDate, () => []).add(r);
+        }
+        final sid = r['attendance_sessions']?['id']?.toString() ?? '';
+        if (sid.isNotEmpty) {
+          final entry = sessions.putIfAbsent(
+              sid,
+              () => {
+                    'date': rawDate,
+                    'class': classCode(r),
+                    'total': 0,
+                    'attended': 0,
+                    'present': 0,
+                    'late': 0,
+                    'excused': 0,
+                    'absent': 0,
+                  });
+          entry['total'] = (entry['total'] as int) + 1;
+          final st = r['status']?.toString().toLowerCase();
+          if (st == 'present' || st == 'late' || st == 'excused') {
+            entry['attended'] = (entry['attended'] as int) + 1;
+          }
+          if (st == 'present') entry['present'] = (entry['present'] as int) + 1;
+          if (st == 'late') entry['late'] = (entry['late'] as int) + 1;
+          if (st == 'excused') entry['excused'] = (entry['excused'] as int) + 1;
+          if (st == 'absent') entry['absent'] = (entry['absent'] as int) + 1;
+        }
+      }
+
+      // Keep the exact same trend definition as the dashboard (Present + Excused),
+      // but export every matching session date rather than only the latest ten.
+      final trendRows = recordsByDate.keys.toList()..sort();
+      final trendData = trendRows.map((date) {
+        final dayRecords = recordsByDate[date]!;
+        final good = dayRecords.where((r) {
+          final st = r['status']?.toString().toLowerCase();
+          return st == 'present' || st == 'excused';
+        }).length;
+        return <String>[
+          date,
+          '$good/${dayRecords.length}',
+          '${dayRecords.isEmpty ? '0.0' : (good / dayRecords.length * 100).toStringAsFixed(1)}%',
+        ];
+      }).toList();
+
+      final weekdayNames = [
+        'Monday',
+        'Tuesday',
+        'Wednesday',
+        'Thursday',
+        'Friday'
+      ];
+      final weekdayRows = <List<String>>[];
+      for (var i = 0; i < 5; i++) {
+        final dayRecords = records.where((r) {
+          final dt = DateTime.tryParse(
+              r['attendance_sessions']?['date']?.toString() ?? '');
+          return dt != null && dt.weekday == i + 1;
+        }).toList();
+        final good = dayRecords.where((r) {
+          final st = r['status']?.toString().toLowerCase();
+          return st == 'present' || st == 'excused';
+        }).length;
+        weekdayRows.add([
+          weekdayNames[i],
+          '${dayRecords.length}',
+          dayRecords.isEmpty
+              ? 'No sessions'
+              : '${(good / dayRecords.length * 100).toStringAsFixed(1)}%',
+        ]);
+      }
+
+      final reasons = <String, int>{
+        for (final reason in _reasonCategories) reason: 0,
+      };
+      for (final r in records) {
+        final st = r['status']?.toString().toLowerCase();
+        if (st != 'absent' && st != 'late' && st != 'excused') continue;
+        final cat = r['reason_category']?.toString();
+        final key = cat != null && reasons.containsKey(cat) ? cat : 'Other';
+        reasons[key] = (reasons[key] ?? 0) + 1;
+      }
+
+      final stats = <String, Map<String, dynamic>>{};
+      for (final r in records) {
+        final id = r['profiles']?['id']?.toString() ?? '';
+        if (id.isEmpty) continue;
+        final item = stats.putIfAbsent(
+            id,
+            () => {
+                  'name': studentName(r),
+                  'schoolId': value(r['profiles']?['school_id']),
+                  'class': classCode(r),
+                  'total': 0,
+                  'present': 0,
+                  'late': 0,
+                  'excused': 0,
+                  'absent': 0,
+                });
+        item['total'] = (item['total'] as int) + 1;
+        final st = r['status']?.toString().toLowerCase();
+        if (st == 'present') item['present'] = (item['present'] as int) + 1;
+        if (st == 'late') item['late'] = (item['late'] as int) + 1;
+        if (st == 'excused') item['excused'] = (item['excused'] as int) + 1;
+        if (st == 'absent') item['absent'] = (item['absent'] as int) + 1;
+      }
+
+      final atRisk = stats.values
+          .where((s) => (s['absent'] as int) >= 2)
+          .toList()
+        ..sort((a, b) => (b['absent'] as int).compareTo(a['absent'] as int));
+
+      int pending = 0, approved = 0, rejected = 0;
+      final absenceEntries = <Map<String, dynamic>>[];
+      for (final r in records) {
+        final letters = r['absence_reasons'] as List? ?? [];
+        if (letters.isEmpty) {
+          final st = r['status']?.toString().toLowerCase();
+          final cat = value(r['reason_category'], '');
+          final remark = value(r['remarks'], '');
+          if (st == 'absent' || st == 'late' || st == 'excused') {
+            absenceEntries.add({
+              'record': r,
+              'reason': cat.isNotEmpty
+                  ? cat
+                  : (remark.isNotEmpty &&
+                          !remark.toLowerCase().contains('auto-marked')
+                      ? remark
+                      : 'No reason provided'),
+              'status': 'No separate excuse submission',
+              'teacherRemark': '',
+            });
+          }
+        } else {
+          for (final raw in letters) {
+            if (raw is! Map) continue;
+            final letter = Map<String, dynamic>.from(raw);
+            final st = value(letter['status'], 'Unknown').toLowerCase();
+            if (st == 'pending') pending++;
+            if (st == 'approved') approved++;
+            if (st == 'rejected') rejected++;
+            absenceEntries.add({
+              'record': r,
+              'reason': value(letter['reason'], 'No reason text supplied'),
+              'status': st.toUpperCase(),
+              'teacherRemark': value(letter['teacher_remark'], ''),
+            });
+          }
+        }
+      }
+
+      final quickFactsRows = [
+        ['Sessions held', '${uniqueSessions.length}'],
+        ['Students', '${uniqueStudents.length}'],
+        ['Late rate', '${(late / total * 100).toStringAsFixed(1)}%'],
+        ['Absent rate', '${(absent / total * 100).toStringAsFixed(1)}%'],
+      ];
+
+      final sessionList = sessions.values.toList()
+        ..sort((a, b) => (a['date'] as String).compareTo(b['date'] as String));
+      final sessionRows = sessionList
+          .map((s) => [
+                value(s['date']),
+                value(s['class']),
+                '${s['attended']}/${s['total']}',
+                '${((s['attended'] as int) / (s['total'] as int) * 100).toStringAsFixed(1)}%',
+                'P:${s['present']}  L:${s['late']}  E:${s['excused']}  A:${s['absent']}',
+              ])
+          .toList();
+
+      final classRows = recordsByClass.entries.map((entry) {
+        final list = entry.value;
+        final good = list.where((r) {
+          final st = r['status']?.toString().toLowerCase();
+          return st == 'present' || st == 'excused';
+        }).length;
+        return [
+          entry.key,
+          '${list.length}',
+          '$good',
+          '${(good / list.length * 100).toStringAsFixed(1)}%',
+        ];
+      }).toList();
+
+      final studentRows = stats.values.toList()
+        ..sort((a, b) => a['name'].toString().compareTo(b['name'].toString()));
+
+      final trendSummary = trendRows.isEmpty
+          ? 'No dated attendance sessions in the selected records.'
+          : 'Includes ${trendRows.length} session date(s), oldest to newest. Dashboard trend rate is Present + Excused.';
+      final generatedAt = DateTime.now().toLocal().toString().split('.').first;
+
+      pdf.addPage(pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 32),
+        header: (ctx) => pw.Column(children: [
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: pw.CrossAxisAlignment.end,
+            children: [
+              pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text('ClassKeeper',
+                        style: pw.TextStyle(
+                            fontSize: 21,
+                            fontWeight: pw.FontWeight.bold,
+                            color: navy)),
+                    pw.Text('COMPLETE REPORTS EXPORT',
+                        style: pw.TextStyle(
+                            fontSize: 9,
+                            fontWeight: pw.FontWeight.bold,
+                            letterSpacing: 1,
+                            color: PdfColors.blueGrey700)),
+                  ]),
+              pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.end,
+                  children: [
+                    pw.Text('Class: $_selectedClass',
+                        style: pw.TextStyle(
+                            fontSize: 8.5,
+                            fontWeight: pw.FontWeight.bold,
+                            color: navy)),
+                    pw.Text('Dates: ${_getDateDisplayString()}',
+                        style: const pw.TextStyle(
+                            fontSize: 8, color: PdfColors.grey700)),
+                    pw.Text('Status: $_selectedStatus',
+                        style: const pw.TextStyle(
+                            fontSize: 8, color: PdfColors.grey700)),
+                    if (_searchQuery.trim().isNotEmpty)
+                      pw.Text('Search: ${_searchQuery.trim()}',
+                          style: const pw.TextStyle(
+                              fontSize: 8, color: PdfColors.grey700)),
+                  ]),
+            ],
+          ),
+          pw.SizedBox(height: 7),
+          pw.Divider(color: navy, thickness: 1.3),
+          pw.SizedBox(height: 5),
+        ]),
+        footer: (ctx) => pw.Container(
+          margin: const pw.EdgeInsets.only(top: 10),
+          padding: const pw.EdgeInsets.only(top: 6),
+          decoration: const pw.BoxDecoration(
+              border: pw.Border(
+                  top: pw.BorderSide(color: PdfColors.grey300, width: 0.5))),
+          child: pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Text('Generated $generatedAt | Complete Reports Export',
+                    style: const pw.TextStyle(
+                        fontSize: 7, color: PdfColors.grey600)),
+                pw.Text('Page ${ctx.pageNumber} of ${ctx.pagesCount}',
+                    style: pw.TextStyle(
+                        fontSize: 7,
+                        fontWeight: pw.FontWeight.bold,
+                        color: navy)),
+              ]),
+        ),
+        build: (ctx) {
+          final out = <pw.Widget>[];
+
+          out.add(heading('1. Report Summary',
+              'All figures below are calculated from ${records.length} records matching the active filters.'));
+          out.add(pw.Row(children: [
+            _pdfStatCard(
+                'TOTAL RECORDS', '$total', navy, PdfColor.fromHex('#EFF6FF')),
+            pw.SizedBox(width: 6),
+            _pdfStatCard(
+                'PRESENT', '$present', green, PdfColor.fromHex('#ECFDF5')),
+            pw.SizedBox(width: 6),
+            _pdfStatCard('LATE', '$late', amber, PdfColor.fromHex('#FFFBEB')),
+            pw.SizedBox(width: 6),
+            _pdfStatCard(
+                'EXCUSED', '$excused', purple, PdfColor.fromHex('#EEF2FF')),
+            pw.SizedBox(width: 6),
+            _pdfStatCard('ABSENT', '$absent', red, PdfColor.fromHex('#FEF2F2')),
+          ]));
+          out.add(pw.SizedBox(height: 8));
+          out.add(dataTable([
+            'Metric',
+            'Value'
+          ], [
+            [
+              'Average attendance (Present + Late + Excused)',
+              '${attendanceRate.toStringAsFixed(1)}%'
+            ],
+            ['On-time rate (Present)', '${onTimeRate.toStringAsFixed(1)}%'],
+            ['Unique students', '${uniqueStudents.length}'],
+            ['Unique sessions', '${uniqueSessions.length}'],
+            ['Records included', '$total'],
+          ]));
+
+          out.add(heading('2. Quick Facts'));
+          out.add(dataTable(['Quick Fact', 'Value'], quickFactsRows));
+
+          out.add(heading('3. Next Week Outlook',
+              'Estimate based on the selected records and the existing dashboard forecasting rules.'));
+          out.add(dataTable([
+            'Forecast Measure',
+            'Value',
+            'Interpretation'
+          ], [
+            [
+              'Expected attendance',
+              '${_projectedNextWeekRate.toStringAsFixed(1)}%',
+              _forecastRiskLevel
+            ],
+            [
+              'Possible at-risk students',
+              '$_projectedAtRiskCount',
+              'Based on current absence counts'
+            ],
+          ]));
+          out.add(pw.Padding(
+            padding: const pw.EdgeInsets.only(top: 5),
+            child: pw.Text(
+              'Expected attendance is the average of the latest three session rates (Present + Excused), falling back to the overall attendance rate when no session trend is available. Possible at-risk combines students with 2+ absences and half of students with 1 absence.',
+              style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey700),
+            ),
+          ));
+
+          out.add(heading('4. Attendance Breakdown'));
+          out.add(dataTable([
+            'Status',
+            'Records',
+            'Share'
+          ], [
+            [
+              'Present',
+              '$present',
+              '${(present / total * 100).toStringAsFixed(1)}%'
+            ],
+            ['Late', '$late', '${(late / total * 100).toStringAsFixed(1)}%'],
+            [
+              'Excused',
+              '$excused',
+              '${(excused / total * 100).toStringAsFixed(1)}%'
+            ],
+            [
+              'Absent',
+              '$absent',
+              '${(absent / total * 100).toStringAsFixed(1)}%'
+            ],
+          ]));
+
+          out.add(pdfBarChart(
+            'Attendance Status Distribution',
+            [
+              {'label': 'Present', 'value': present, 'color': green},
+              {'label': 'Late', 'value': late, 'color': amber},
+              {'label': 'Excused', 'value': excused, 'color': purple},
+              {'label': 'Absent', 'value': absent, 'color': red},
+            ],
+            maxValue: total.toDouble(),
+          ));
+
+          out.add(heading('5. Attendance Trend', trendSummary));
+          out.add(dataTable(
+              ['Session Date', 'Present + Excused / Total', 'Attendance Rate'],
+              trendData));
+
+          out.add(pdfBarChart(
+            'Attendance Rate by Session Date',
+            trendRows.map((date) {
+              final dayRecords = recordsByDate[date]!;
+              final good = dayRecords.where((r) {
+                final st = r['status']?.toString().toLowerCase();
+                return st == 'present' || st == 'excused';
+              }).length;
+              final rate =
+                  dayRecords.isEmpty ? 0.0 : good / dayRecords.length * 100;
+              return <String, dynamic>{
+                'label': date,
+                'value': rate,
+                'percent': true,
+                'color': green,
+              };
+            }).toList(),
+          ));
+
+          out.add(heading('6. Attendance by Day of Week',
+              'Weekday rates use Present + Excused, consistent with the dashboard weekday chart.'));
+          out.add(dataTable(
+              ['Weekday', 'Records', 'Attendance Rate'], weekdayRows));
+
+          out.add(pdfBarChart(
+            'Weekday Attendance Rate',
+            List.generate(5, (i) {
+              final dayRecords = records.where((r) {
+                final dt = DateTime.tryParse(
+                    r['attendance_sessions']?['date']?.toString() ?? '');
+                return dt != null && dt.weekday == i + 1;
+              }).toList();
+              final good = dayRecords.where((r) {
+                final st = r['status']?.toString().toLowerCase();
+                return st == 'present' || st == 'excused';
+              }).length;
+              return <String, dynamic>{
+                'label': weekdayNames[i],
+                'value':
+                    dayRecords.isEmpty ? 0.0 : good / dayRecords.length * 100,
+                'percent': true,
+                'color': navy,
+              };
+            }),
+          ));
+
+          out.add(heading('7. Absence Reason Breakdown'));
+          out.add(dataTable(['Reason Category', 'Count'],
+              reasons.entries.map((e) => [e.key, '${e.value}']).toList()));
+
+          out.add(pdfBarChart(
+            'Absence Reason Distribution',
+            reasons.entries
+                .map((entry) => <String, dynamic>{
+                      'label': entry.key,
+                      'value': entry.value,
+                      'color': amber,
+                    })
+                .toList(),
+            maxValue: reasons.values
+                .fold<int>(
+                  0,
+                  (largest, count) => count > largest ? count : largest,
+                )
+                .toDouble(),
+          ));
+
+          out.add(heading('8. At-Risk Students Roster',
+              'Students with two or more absences in the selected records.'));
+          out.add(atRisk.isEmpty
+              ? pw.Text('No students currently meet the at-risk threshold.',
+                  style: const pw.TextStyle(fontSize: 8))
+              : dataTable(
+                  ['Student', 'School ID', 'Class', 'Absences'],
+                  atRisk
+                      .map((s) => [
+                            s['name'].toString(),
+                            s['schoolId'].toString(),
+                            s['class'].toString(),
+                            '${s['absent']}',
+                          ])
+                      .toList()));
+
+          out.add(heading('9. Class-by-Class Attendance Rate',
+              'Rate shown as Present + Excused / all matching records in each class.'));
+          out.add(dataTable(
+              ['Class', 'Records', 'Present + Excused', 'Rate'], classRows));
+
+          out.add(heading('10. Session Attendance',
+              'Every session represented in the selected records, including the lowest and highest sessions.'));
+          out.add(dataTable(
+              ['Date', 'Class', 'Attended / Total', 'Rate', 'Status Counts'],
+              sessionRows));
+
+          out.add(heading('11. Student Highlights',
+              'Complete per-student status totals for all students represented in the filtered records.'));
+          out.add(dataTable(
+              [
+                'Student',
+                'School ID',
+                'Class',
+                'Total',
+                'Present',
+                'Late',
+                'Excused',
+                'Absent'
+              ],
+              studentRows
+                  .map((s) => [
+                        s['name'].toString(),
+                        s['schoolId'].toString(),
+                        s['class'].toString(),
+                        '${s['total']}',
+                        '${s['present']}',
+                        '${s['late']}',
+                        '${s['excused']}',
+                        '${s['absent']}',
+                      ])
+                  .toList()));
+
+          out.add(heading('12. Excuse Letter Summary'));
+          out.add(dataTable([
+            'Review Status',
+            'Count'
+          ], [
+            ['Pending', '$pending'],
+            ['Approved', '$approved'],
+            ['Rejected', '$rejected'],
+            ['Total submitted letters', '${pending + approved + rejected}'],
+          ]));
+
+          out.add(heading(
+              '13. Complete Absence Details & Hard-Copy Documentation',
+              '${absenceEntries.length} absence/excuse detail item(s). Each submitted absence reason is listed separately. Original medical certificates or official school memos must be submitted as hard copies to the school.'));
+          if (absenceEntries.isEmpty) {
+            out.add(pw.Text(
+                'No submitted absence details or reason remarks were found in the selected records.',
+                style: const pw.TextStyle(fontSize: 8)));
+          } else {
+            for (var i = 0; i < absenceEntries.length; i++) {
+              final item = absenceEntries[i];
+              final r = item['record'] as Map<String, dynamic>;
+              out.add(pw.Container(
+                margin: const pw.EdgeInsets.only(bottom: 8),
+                padding: const pw.EdgeInsets.all(8),
+                decoration: pw.BoxDecoration(
+                  color: i.isEven ? PdfColors.white : pale,
+                  border: pw.Border.all(color: border, width: 0.6),
+                  borderRadius:
+                      const pw.BorderRadius.all(pw.Radius.circular(5)),
+                ),
+                child: pw.Row(
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
                     pw.Expanded(
-                      flex: 1,
-                      child: pw.Container(
-                        padding: const pw.EdgeInsets.all(12),
-                        decoration: pw.BoxDecoration(
-                          color: PdfColors.white,
-                          borderRadius:
-                              const pw.BorderRadius.all(pw.Radius.circular(8)),
-                          border: pw.Border.all(color: borderGrey, width: 0.8),
-                        ),
-                        child: pw.Column(
-                          crossAxisAlignment: pw.CrossAxisAlignment.start,
-                          children: [
-                            pw.Text(
-                              'Attendance Distribution',
+                      child: pw.Column(
+                        crossAxisAlignment: pw.CrossAxisAlignment.start,
+                        children: [
+                          pw.Text('${studentName(r)}  •  ${classCode(r)}',
                               style: pw.TextStyle(
-                                fontSize: 11,
-                                fontWeight: pw.FontWeight.bold,
-                                color: brandNavy,
-                              ),
-                            ),
-                            pw.SizedBox(height: 10),
-                            _pdfLegendRow('Present', '$presentPct%',
-                                PdfColor.fromHex('#059669')),
-                            pw.SizedBox(height: 6),
-                            _pdfLegendRow('Late', '$latePct%',
-                                PdfColor.fromHex('#D97706')),
-                            pw.SizedBox(height: 6),
-                            _pdfLegendRow('Excused', '$excusedPct%',
-                                PdfColor.fromHex('#4F46E5')),
-                            pw.SizedBox(height: 6),
-                            _pdfLegendRow('Absent', '$absentPct%',
-                                PdfColor.fromHex('#DC2626')),
-                          ],
-                        ),
-                      ),
-                    ),
-                    pw.SizedBox(width: 12),
-                    pw.Expanded(
-                      flex: 1,
-                      child: pw.Container(
-                        padding: const pw.EdgeInsets.all(12),
-                        decoration: pw.BoxDecoration(
-                          color: PdfColors.white,
-                          borderRadius:
-                              const pw.BorderRadius.all(pw.Radius.circular(8)),
-                          border: pw.Border.all(color: borderGrey, width: 0.8),
-                        ),
-                        child: pw.Column(
-                          crossAxisAlignment: pw.CrossAxisAlignment.start,
-                          children: [
-                            pw.Text(
-                              'Absence Reason Drivers',
-                              style: pw.TextStyle(
-                                fontSize: 11,
-                                fontWeight: pw.FontWeight.bold,
-                                color: brandNavy,
-                              ),
-                            ),
-                            pw.SizedBox(height: 10),
-                            ...reasons.entries.map((entry) {
-                              final pct = totalAbsences > 0
-                                  ? (entry.value / totalAbsences)
-                                  : 0.0;
-                              return pw.Padding(
-                                padding: const pw.EdgeInsets.only(bottom: 6.0),
-                                child: pw.Column(
-                                  crossAxisAlignment:
-                                      pw.CrossAxisAlignment.start,
-                                  children: [
-                                    pw.Row(
-                                      mainAxisAlignment:
-                                          pw.MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        pw.Text(entry.key,
-                                            style: const pw.TextStyle(
-                                                fontSize: 7.5,
-                                                color: PdfColors.grey800)),
-                                        pw.Text(
-                                            '${entry.value} (${(pct * 100).toStringAsFixed(0)}%)',
-                                            style: pw.TextStyle(
-                                                fontSize: 7.5,
-                                                fontWeight: pw.FontWeight.bold,
-                                                color: brandNavy)),
-                                      ],
-                                    ),
-                                    pw.SizedBox(height: 2),
-                                    pw.Container(
-                                      height: 5,
-                                      width: double.infinity,
-                                      decoration: const pw.BoxDecoration(
-                                        color: PdfColors.grey200,
-                                        borderRadius: pw.BorderRadius.all(
-                                            pw.Radius.circular(3)),
-                                      ),
-                                      child: pw.Align(
-                                        alignment: pw.Alignment.centerLeft,
-                                        child: pw.Container(
-                                          width: pct * 180,
-                                          height: 5,
-                                          decoration: pw.BoxDecoration(
-                                            color: accentBlue,
-                                            borderRadius:
-                                                const pw.BorderRadius.all(
-                                                    pw.Radius.circular(3)),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            }),
-                          ],
-                        ),
+                                  fontSize: 8.5,
+                                  fontWeight: pw.FontWeight.bold,
+                                  color: navy)),
+                          pw.SizedBox(height: 3),
+                          pw.Text(
+                              'Date: ${dateOf(r)}  |  Attendance status: ${statusOf(r)}',
+                              style: const pw.TextStyle(fontSize: 7.2)),
+                          pw.SizedBox(height: 3),
+                          pw.Text('Submitted reason: ${item['reason']}',
+                              style: const pw.TextStyle(fontSize: 7.5)),
+                          pw.Text('Review status: ${item['status']}',
+                              style: const pw.TextStyle(fontSize: 7.2)),
+                          if ((item['teacherRemark'] as String).isNotEmpty)
+                            pw.Text('Teacher remark: ${item['teacherRemark']}',
+                                style: const pw.TextStyle(fontSize: 7.2)),
+                        ],
                       ),
                     ),
                   ],
                 ),
-              );
-              widgets.add(pw.SizedBox(height: 18));
-            } else {
-              widgets.add(
-                pw.Row(
-                  children: [
-                    _pdfStatCard('TOTAL LOGS', '${_filteredRecords.length}',
-                        brandNavy, lightBlueBg),
-                    pw.SizedBox(width: 8),
-                    _pdfStatCard(
-                        'PRESENT',
-                        '$_presentCount',
-                        PdfColor.fromHex('#059669'),
-                        PdfColor.fromHex('#ECFDF5')),
-                    pw.SizedBox(width: 8),
-                    _pdfStatCard(
-                        'LATE',
-                        '$_lateCount',
-                        PdfColor.fromHex('#D97706'),
-                        PdfColor.fromHex('#FFFBEB')),
-                    pw.SizedBox(width: 8),
-                    _pdfStatCard(
-                        'EXCUSED',
-                        '$_excusedCount',
-                        PdfColor.fromHex('#4F46E5'),
-                        PdfColor.fromHex('#EEF2FF')),
-                    pw.SizedBox(width: 8),
-                    _pdfStatCard(
-                        'ABSENT',
-                        '$_absentCount',
-                        PdfColor.fromHex('#DC2626'),
-                        PdfColor.fromHex('#FEF2F2')),
-                  ],
-                ),
-              );
-              widgets.add(pw.SizedBox(height: 18));
+              ));
             }
+          }
 
-            // --- DEDICATED REASONS & PROOFS HIGHLIGHT SECTION ---
-            if (recordsWithReasons.isNotEmpty) {
-              widgets.add(
-                pw.Container(
-                  width: double.infinity,
-                  padding: const pw.EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 6),
-                  decoration: pw.BoxDecoration(
-                    color: PdfColor.fromHex('#D97706'),
-                    borderRadius:
-                        const pw.BorderRadius.all(pw.Radius.circular(4)),
-                  ),
-                  child: pw.Row(
-                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                    children: [
-                      pw.Text(
-                        'SUBMITTED EXCUSE REASONS & PROOFS (${recordsWithReasons.length})',
-                        style: pw.TextStyle(
-                          fontSize: 10,
-                          fontWeight: pw.FontWeight.bold,
-                          color: PdfColors.white,
-                        ),
-                      ),
-                      pw.Text(
-                        'Flagged / Pending Review',
-                        style: pw.TextStyle(
+          out.add(heading('14. Complete Attendance Records',
+              'All ${records.length} matching attendance records are included. This list is not limited by the on-screen pagination.'));
+          for (final entry in recordsByClass.entries) {
+            out.add(pw.Container(
+              margin: const pw.EdgeInsets.only(top: 5, bottom: 4),
+              padding:
+                  const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+              color: navy,
+              child: pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Text(entry.key,
+                      style: pw.TextStyle(
                           fontSize: 8.5,
                           fontWeight: pw.FontWeight.bold,
-                          color: PdfColor.fromHex('#FEF3C7'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-              widgets.add(pw.SizedBox(height: 6));
+                          color: PdfColors.white)),
+                  pw.Text('${entry.value.length} record(s)',
+                      style: const pw.TextStyle(
+                          fontSize: 7.5, color: PdfColors.white)),
+                ],
+              ),
+            ));
+            out.add(dataTable(
+              [
+                'Student',
+                'School ID',
+                'Status',
+                'Date / Time',
+                'Reason / Remarks'
+              ],
+              entry.value.map((r) {
+                final cat = value(r['reason_category'], '');
+                final remarks = value(r['remarks'], '');
+                final letters = r['absence_reasons'] as List? ?? [];
+                final submitted = letters
+                    .whereType<Map>()
+                    .map((a) => value(a['reason'], ''))
+                    .where((v) => v.isNotEmpty)
+                    .join('; ');
+                final reasonText = [
+                  if (cat.isNotEmpty) cat,
+                  if (remarks.isNotEmpty &&
+                      !remarks.toLowerCase().contains('auto-marked'))
+                    remarks,
+                  if (submitted.isNotEmpty) 'Submitted: $submitted',
+                ].join(' | ');
+                return [
+                  studentName(r),
+                  value(r['profiles']?['school_id']),
+                  statusOf(r),
+                  dateOf(r),
+                  reasonText.isEmpty ? '-' : reasonText,
+                ];
+              }).toList(),
+            ));
+          }
 
-              widgets.add(
-                pw.Table(
-                  border: pw.TableBorder.all(color: borderGrey, width: 0.5),
-                  columnWidths: const {
-                    0: pw.FlexColumnWidth(2.2),
-                    1: pw.FlexColumnWidth(1.6),
-                    2: pw.FlexColumnWidth(1.2),
-                    3: pw.FlexColumnWidth(3.8),
-                    4: pw.FlexColumnWidth(1.8),
-                  },
-                  children: [
-                    pw.TableRow(
-                      decoration:
-                          pw.BoxDecoration(color: PdfColor.fromHex('#F59E0B')),
-                      children: [
-                        _pdfHeaderCell('Student Name'),
-                        _pdfHeaderCell('Class'),
-                        _pdfHeaderCell('Status'),
-                        _pdfHeaderCell('Reason / Explanation'),
-                        _pdfHeaderCell('Proof Attached'),
-                      ],
-                    ),
-                    ...List.generate(recordsWithReasons.length, (idx) {
-                      final rec = recordsWithReasons[idx];
-                      final prof = rec['profiles'];
-                      final sName = prof?['full_name']?.toString() ?? 'N/A';
-                      final classCode = rec['attendance_sessions']?['classes']
-                                  ?['course_code']
-                              ?.toString() ??
-                          'N/A';
-                      final stStr =
-                          (rec['status'] ?? 'N/A').toString().toUpperCase();
-
-                      final cat = rec['reason_category']?.toString() ?? '';
-                      final rem = rec['remarks']?.toString() ?? '';
-                      final isAuto = rem.toLowerCase().contains('auto-marked');
-
-                      final absList = rec['absence_reasons'] as List?;
-                      String? absReason;
-                      bool proof = false;
-                      if (absList != null && absList.isNotEmpty) {
-                        final f = absList.first;
-                        absReason = f['reason']?.toString();
-                        final p = f['proof_url']?.toString();
-                        if (p != null && p.isNotEmpty) proof = true;
-                      }
-
-                      String rText = '';
-                      if (absReason != null && absReason.trim().isNotEmpty) {
-                        rText = absReason.trim();
-                      } else if (cat.isNotEmpty) {
-                        rText = cat;
-                        if (rem.isNotEmpty && !isAuto) rText += ' ($rem)';
-                      } else if (rem.isNotEmpty && !isAuto) {
-                        rText = rem;
-                      }
-
-                      final isEven = idx % 2 == 0;
-                      final rowBg = isEven ? PdfColors.white : rowSoftBlue;
-
-                      return pw.TableRow(
-                        decoration: pw.BoxDecoration(color: rowBg),
-                        children: [
-                          _pdfCell(sName, isBold: true),
-                          _pdfCell(classCode),
-                          _pdfCell(stStr, isBold: true),
-                          _pdfCell(rText.isEmpty ? 'Reason submitted' : rText),
-                          _pdfCell(proof ? 'YES (Image)' : 'NO'),
-                        ],
-                      );
-                    }),
-                  ],
-                ),
-              );
-              widgets.add(pw.SizedBox(height: 16));
-            }
-
-            recordsByClass.forEach((classCode, records) {
-              widgets.add(
-                pw.Container(
-                  width: double.infinity,
-                  padding: const pw.EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 6),
-                  decoration: pw.BoxDecoration(
-                    color: brandNavy,
-                    borderRadius:
-                        const pw.BorderRadius.all(pw.Radius.circular(4)),
-                  ),
-                  child: pw.Row(
-                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                    children: [
-                      pw.Text(
-                        'CLASS: $classCode',
-                        style: pw.TextStyle(
-                          fontSize: 10,
-                          fontWeight: pw.FontWeight.bold,
-                          color: PdfColors.white,
-                        ),
-                      ),
-                      pw.Text(
-                        '${records.length} Record(s)',
-                        style: pw.TextStyle(
-                          fontSize: 9,
-                          fontWeight: pw.FontWeight.bold,
-                          color: PdfColor.fromHex('#BFDBFE'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-              widgets.add(pw.SizedBox(height: 6));
-
-              widgets.add(
-                pw.Table(
-                  border: pw.TableBorder.all(
-                    color: borderGrey,
-                    width: 0.5,
-                  ),
-                  columnWidths: const {
-                    0: pw.FlexColumnWidth(2.5),
-                    1: pw.FlexColumnWidth(1.8),
-                    2: pw.FlexColumnWidth(1.4),
-                    3: pw.FlexColumnWidth(2.8),
-                    4: pw.FlexColumnWidth(3.2),
-                  },
-                  children: [
-                    pw.TableRow(
-                      decoration: pw.BoxDecoration(color: accentBlue),
-                      children: [
-                        _pdfHeaderCell('Student Name'),
-                        _pdfHeaderCell('School ID'),
-                        _pdfHeaderCell('Status'),
-                        _pdfHeaderCell('Timestamp'),
-                        _pdfHeaderCell('Remarks / Reason'),
-                      ],
-                    ),
-                    ...List.generate(records.length, (index) {
-                      final record = records[index];
-                      final profile = record['profiles'];
-                      final name = profile?['full_name']?.toString() ?? 'N/A';
-                      final schoolId =
-                          profile?['school_id']?.toString() ?? 'N/A';
-                      final status =
-                          (record['status'] ?? 'N/A').toString().toUpperCase();
-
-                      final category =
-                          record['reason_category']?.toString() ?? '';
-                      final remarks = record['remarks']?.toString() ?? '';
-                      final isAutoMarked =
-                          remarks.toLowerCase().contains('auto-marked');
-
-                      final absenceList = record['absence_reasons'] as List?;
-                      String? absenceReasonText;
-                      bool hasProof = false;
-                      if (absenceList != null && absenceList.isNotEmpty) {
-                        final firstAbs = absenceList.first;
-                        absenceReasonText = firstAbs['reason']?.toString();
-                        final pUrl = firstAbs['proof_url']?.toString();
-                        if (pUrl != null && pUrl.isNotEmpty) {
-                          hasProof = true;
-                        }
-                      }
-
-                      String fullRemark = '';
-                      if (absenceReasonText != null &&
-                          absenceReasonText.trim().isNotEmpty) {
-                        fullRemark = absenceReasonText.trim();
-                      } else if (category.isNotEmpty) {
-                        fullRemark = category;
-                        if (remarks.isNotEmpty && !isAutoMarked) {
-                          fullRemark += ' ($remarks)';
-                        }
-                      } else if (remarks.isNotEmpty && !isAutoMarked) {
-                        fullRemark = remarks;
-                      }
-
-                      if (hasProof) {
-                        fullRemark = fullRemark.isNotEmpty
-                            ? '$fullRemark [Proof Attached]'
-                            : '[Proof Attached]';
-                      }
-
-                      if (fullRemark.isEmpty) {
-                        fullRemark = isAutoMarked ? '-' : '-';
-                      }
-
-                      final scannedAt = record['scanned_at']?.toString();
-                      final sessionDate =
-                          record['attendance_sessions']?['date']?.toString();
-                      final timeStr = _formatDateTime(scannedAt, sessionDate);
-
-                      final isEven = index % 2 == 0;
-                      final rowBg = isEven ? PdfColors.white : rowSoftBlue;
-
-                      PdfColor statusColor = PdfColor.fromHex('#059669');
-                      if (status == 'LATE')
-                        statusColor = PdfColor.fromHex('#D97706');
-                      if (status == 'EXCUSED')
-                        statusColor = PdfColor.fromHex('#4F46E5');
-                      if (status == 'ABSENT')
-                        statusColor = PdfColor.fromHex('#DC2626');
-
-                      return pw.TableRow(
-                        decoration: pw.BoxDecoration(color: rowBg),
-                        children: [
-                          _pdfCell(name, isBold: true),
-                          _pdfCell(schoolId),
-                          pw.Padding(
-                            padding: const pw.EdgeInsets.all(6),
-                            child: pw.Text(
-                              status,
-                              style: pw.TextStyle(
-                                fontSize: 8,
-                                fontWeight: pw.FontWeight.bold,
-                                color: statusColor,
-                              ),
-                            ),
-                          ),
-                          _pdfCell(timeStr),
-                          _pdfCell(fullRemark),
-                        ],
-                      );
-                    }),
-                  ],
-                ),
-              );
-
-              widgets.add(pw.SizedBox(height: 14));
-            });
-
-            return widgets;
-          },
-        ),
-      );
+          return out;
+        },
+      ));
 
       await Printing.sharePdf(
         bytes: await pdf.save(),
         filename:
-            'attendance_analytics_${DateTime.now().millisecondsSinceEpoch}.pdf',
+            'complete_reports_${DateTime.now().millisecondsSinceEpoch}.pdf',
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            'Failed to export PDF: $e',
-            style: GoogleFonts.poppins(fontSize: 11),
-          ),
+          content: Text('Failed to export PDF: $e',
+              style: GoogleFonts.poppins(fontSize: 11)),
           backgroundColor: const Color(0xFFEF4444),
           behavior: SnackBarBehavior.floating,
         ),
@@ -3494,10 +3434,10 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
             _buildMetricCard(
                 'Avg Attendance',
                 '${_avgAttendanceRate.toStringAsFixed(1)}%',
-                'Present + Excused',
+                'Present, late, excused',
                 true,
                 Icons.trending_up_rounded,
-                const Color(0xFF10B981)),
+                AnalyticsColors.present),
             const SizedBox(width: 6),
             _buildMetricCard(
                 'On-Time Rate',
@@ -3505,7 +3445,7 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
                 'Punctual scans',
                 true,
                 Icons.check_circle_outline_rounded,
-                AppColors.primaryBlue),
+                AnalyticsColors.blue),
             const SizedBox(width: 6),
             _buildMetricCard(
                 'At-Risk Students',
@@ -3513,10 +3453,10 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
                 '≥2 Absences',
                 false,
                 Icons.warning_amber_rounded,
-                const Color(0xFFEF4444)),
+                AnalyticsColors.absent),
           ],
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 14),
         _buildQuickFactsCard(),
         _buildOutlookCard(atRiskList.length),
         const SizedBox(height: 20),
@@ -3545,16 +3485,38 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
               const SizedBox(height: 16),
               Row(
                 children: [
-                  SizedBox(
-                    width: 110,
-                    height: 110,
-                    child: CustomPaint(
-                      painter: _PieChartPainter(
-                        presentRatio: _presentCount / statusTotal,
-                        lateRatio: _lateCount / statusTotal,
-                        excusedRatio: _excusedCount / statusTotal,
-                        absentRatio: _absentCount / statusTotal,
-                      ),
+                  DonutChart(
+                    size: 124,
+                    thickness: 16,
+                    segments: [
+                      DonutSegment(
+                          _presentCount.toDouble(), AnalyticsColors.present),
+                      DonutSegment(_lateCount.toDouble(), AnalyticsColors.late),
+                      DonutSegment(
+                          _excusedCount.toDouble(), AnalyticsColors.excused),
+                      DonutSegment(
+                          _absentCount.toDouble(), AnalyticsColors.absent),
+                    ],
+                    center: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '${_avgAttendanceRate.toStringAsFixed(0)}%',
+                          style: GoogleFonts.poppins(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: const Color(0xFF0F172A),
+                            height: 1.1,
+                          ),
+                        ),
+                        Text(
+                          'attended',
+                          style: GoogleFonts.poppins(
+                            fontSize: 9.5,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   const SizedBox(width: 20),
@@ -3568,7 +3530,7 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
                             'Late', '$latePct%', const Color(0xFFF59E0B)),
                         const SizedBox(height: 8),
                         _buildLegendItem(
-                            'Excused', '$excusedPct%', const Color(0xFF6366F1)),
+                            'Excused', '$excusedPct%', AnalyticsColors.excused),
                         const SizedBox(height: 8),
                         _buildLegendItem(
                             'Absent', '$absentPct%', const Color(0xFFEF4444)),
@@ -3988,7 +3950,6 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
       );
     }
 
-    final Color accent = _forecastRiskColor;
     final double nowRate = _avgAttendanceRate;
     final double expected = _projectedNextWeekRate;
     final bool growing = _projectedAtRiskCount > atRiskNow;
@@ -4002,7 +3963,7 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
               label,
               style: GoogleFonts.poppins(
                 fontSize: 10,
-                color: Colors.grey.shade600,
+                color: Colors.blueGrey.shade600,
               ),
             ),
             const SizedBox(height: 2),
@@ -4012,9 +3973,9 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
               child: Text(
                 value,
                 style: GoogleFonts.poppins(
-                  fontSize: 20,
+                  fontSize: 22,
                   fontWeight: FontWeight.bold,
-                  color: Colors.grey.shade900,
+                  color: BlueUI.navy,
                 ),
               ),
             ),
@@ -4022,7 +3983,7 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
               caption,
               style: GoogleFonts.poppins(
                 fontSize: 10,
-                color: Colors.grey.shade500,
+                color: Colors.blueGrey.shade500,
               ),
             ),
           ],
@@ -4030,32 +3991,59 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
       );
     }
 
-    return _analyticsCardShell(
-      title: 'Next Week Outlook',
-      subtitle: 'A simple estimate based on absences in the selected records.',
-      accent: accent,
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(color: accent, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 5),
-          Text(
-            _forecastRiskLevel,
-            style: GoogleFonts.poppins(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: accent,
-            ),
-          ),
-        ],
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Next Week Outlook',
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: growing
+                        ? const Color(0xFFB45309)
+                        : const Color(0xFF15803D),
+                  ),
+                ),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: growing
+                      ? const Color(0xFFFFF7ED)
+                      : const Color(0xFFECFDF3),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  _forecastRiskLevel,
+                  style: GoogleFonts.poppins(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.bold,
+                    color: BlueUI.navy,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'A simple estimate based on the selected records.',
+            style: GoogleFonts.poppins(
+              fontSize: 10,
+              color: Colors.blueGrey.shade600,
+            ),
+          ),
+          const SizedBox(height: 14),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -4068,7 +4056,7 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
                 width: 1,
                 height: 56,
                 margin: const EdgeInsets.symmetric(horizontal: 12),
-                color: Colors.grey.shade200,
+                color: const Color(0xFFD7E0EA),
               ),
               figure(
                 'Possible at-risk',
@@ -4078,24 +4066,31 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
             ],
           ),
           const SizedBox(height: 12),
-          Divider(height: 1, color: Colors.grey.shade200),
-          const SizedBox(height: 10),
-          Text(
-            growing
-                ? 'Follow-up: check in with students who already have 1 absence before next week.'
-                : 'Follow-up: nothing needed right now. Keep tracking each session.',
-            style: GoogleFonts.poppins(
-              fontSize: 10.5,
-              color: Colors.grey.shade700,
-              height: 1.4,
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEFF6F2),
+              border: Border.all(color: const Color(0xFFD7EBDD)),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              growing
+                  ? 'Follow-up: check in with students who already have 1 absence before next week.'
+                  : 'Follow-up: nothing needed right now. Keep tracking each session.',
+              style: GoogleFonts.poppins(
+                fontSize: 10.5,
+                color: const Color(0xFF166534),
+                height: 1.4,
+              ),
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 6),
           Text(
-            'Counts students with 2+ absences, plus about half of those with 1.',
+            'Expected = average of the last 3 sessions. Possible at-risk = students with 2+ absences, plus half of those with 1.',
             style: GoogleFonts.poppins(
               fontSize: 9.5,
-              color: Colors.grey.shade500,
+              color: Colors.blueGrey.shade500,
             ),
           ),
         ],
@@ -4174,11 +4169,8 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
     }
     final bool hasData = rates.any((r) => r != null);
 
-    Color colorFor(double r) {
-      if (r >= 0.85) return const Color(0xFF10B981);
-      if (r >= 0.70) return const Color(0xFFF59E0B);
-      return const Color(0xFFEF4444);
-    }
+    // Blue and white
+    Color colorFor(double r) => BlueUI.mid;
 
     return _analyticsCardShell(
       title: 'Attendance by Day',
@@ -4288,49 +4280,84 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
       if (st == 'absent') absent++;
     }
 
-    Widget fact(String value, String label, Color color) {
+    Widget fact(String value, String label) {
       return Expanded(
-        child: Column(
-          children: [
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                value,
-                style: GoogleFonts.poppins(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: color,
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 3),
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF4F7FB),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFE3EAF3)),
+          ),
+          child: Column(
+            children: [
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  value,
+                  style: GoogleFonts.poppins(
+                    fontSize: 17,
+                    fontWeight: FontWeight.bold,
+                    color: BlueUI.navy,
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: GoogleFonts.poppins(
-                fontSize: 9.5,
-                color: Colors.grey.shade600,
+              const SizedBox(height: 2),
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                style: GoogleFonts.poppins(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.blueGrey.shade600,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       );
     }
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 20),
-      child: _analyticsCardShell(
-        title: 'Quick Facts',
-        subtitle: 'For the records currently shown',
-        child: Row(
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFE5EAF1)),
+        ),
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            fact('${sessions.length}', 'Sessions held', AppColors.primaryBlue),
-            fact('${students.length}', 'Students', AppColors.primaryBlue),
-            fact('${(late / recs.length * 100).toStringAsFixed(0)}%',
-                'Late rate', const Color(0xFFF59E0B)),
-            fact('${(absent / recs.length * 100).toStringAsFixed(0)}%',
-                'Absent rate', const Color(0xFFEF4444)),
+            Text(
+              'Quick Facts',
+              style: GoogleFonts.poppins(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: BlueUI.navy,
+              ),
+            ),
+            Text(
+              'For the records currently shown',
+              style: GoogleFonts.poppins(
+                fontSize: 10,
+                color: Colors.blueGrey.shade500,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                fact('${sessions.length}', 'Sessions held'),
+                fact('${students.length}', 'Students'),
+                fact('${(late / recs.length * 100).toStringAsFixed(0)}%',
+                    'Late rate'),
+                fact('${(absent / recs.length * 100).toStringAsFixed(0)}%',
+                    'Absent rate'),
+              ],
+            ),
           ],
         ),
       ),
@@ -4430,12 +4457,13 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
       child: _analyticsCardShell(
         title: 'Session Attendance',
         subtitle: 'Attendance rate per session (present, late or excused)',
+        accent: const Color(0xFF0D9488),
         trailing: const Icon(Icons.event_note_rounded,
-            size: 18, color: AppColors.primaryBlue),
+            size: 18, color: Color(0xFF0D9488)),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            group('Lowest attendance', const Color(0xFFEF4444), lowest),
+            group('Lowest attendance', const Color(0xFFEF5350), lowest),
             const SizedBox(height: 12),
             Divider(height: 1, color: Colors.grey.shade200),
             const SizedBox(height: 12),
@@ -4467,12 +4495,15 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
     final int reviewed = approved + rejected;
 
     Widget tile(String label, int value, Color color) {
+      final Color tint = color.withValues(alpha: 0.09);
+      final Color border = color.withValues(alpha: 0.18);
       return Expanded(
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.08),
+            color: tint,
             borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: border),
           ),
           child: Column(
             children: [
@@ -4510,11 +4541,11 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
           children: [
             Row(
               children: [
-                tile('Pending', pending, const Color(0xFFF59E0B)),
+                tile('Pending', pending, const Color(0xFFE6A23C)),
                 const SizedBox(width: 8),
                 tile('Approved', approved, const Color(0xFF10B981)),
                 const SizedBox(width: 8),
-                tile('Rejected', rejected, const Color(0xFFEF4444)),
+                tile('Rejected', rejected, const Color(0xFFEF5350)),
               ],
             ),
             const SizedBox(height: 10),
@@ -4590,11 +4621,11 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color:
-                enabled ? color.withValues(alpha: 0.07) : Colors.grey.shade50,
+                enabled ? color.withValues(alpha: 0.075) : Colors.grey.shade50,
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
               color: enabled
-                  ? color.withValues(alpha: 0.25)
+                  ? color.withValues(alpha: 0.28)
                   : Colors.grey.shade200,
             ),
           ),
@@ -4668,7 +4699,7 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
                     label: 'Often late',
                     hint: 'Late 2 or more times',
                     icon: Icons.access_time_rounded,
-                    color: const Color(0xFFF59E0B),
+                    color: const Color(0xFFE6A23C),
                     people: lateOften,
                     trailingText: (p) => '${p['late']}x late',
                   ),
@@ -4683,7 +4714,7 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
                     label: '2+ absences',
                     hint: 'Students at risk',
                     icon: Icons.person_off_outlined,
-                    color: const Color(0xFFEF4444),
+                    color: const Color(0xFFEF5350),
                     people: absentOften,
                     trailingText: (p) => '${p['absent']} absences',
                   ),
@@ -5005,11 +5036,6 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
     final remarks = record['remarks'];
     final category = record['reason_category'];
 
-    final absenceList = record['absence_reasons'] as List?;
-    final proofUrl = (absenceList != null && absenceList.isNotEmpty)
-        ? absenceList.first['proof_url']?.toString()
-        : null;
-
     final hasReason = _hasReason(record);
 
     final statusLower = status.toLowerCase();
@@ -5144,9 +5170,7 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
                 ),
               ],
             ),
-            if (category != null ||
-                remarks != null ||
-                (proofUrl != null && proofUrl.isNotEmpty)) ...[
+            if (category != null || remarks != null) ...[
               const SizedBox(height: 8),
               Container(
                 width: double.infinity,
@@ -5167,32 +5191,6 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
                             fontWeight: FontWeight.w500,
                             color: Colors.blueGrey.shade800),
                       ),
-                    if (proofUrl != null && proofUrl.isNotEmpty) ...[
-                      const SizedBox(height: 6),
-                      OutlinedButton.icon(
-                        onPressed: () => _showProofImageModal(proofUrl, name),
-                        icon: const Icon(Icons.image_outlined, size: 14),
-                        label: Text(
-                          'View Attached Proof Image',
-                          style: GoogleFonts.poppins(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AppColors.primaryBlue,
-                          side: const BorderSide(
-                              color: AppColors.primaryBlue, width: 1.2),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
-                          minimumSize: Size.zero,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                        ),
-                      ),
-                    ]
                   ],
                 ),
               ),
@@ -5205,50 +5203,60 @@ class _FacultyRecordsScreenState extends State<FacultyRecordsScreen> {
 
   Widget _buildMetricCard(String title, String value, String subtitle,
       bool isPos, IconData icon, Color iconColor) {
+    final tint = iconColor.withValues(alpha: 0.075);
+    final border = iconColor.withValues(alpha: 0.22);
     return Expanded(
       child: Container(
-        padding: const EdgeInsets.all(8),
+        constraints: const BoxConstraints(minHeight: 112),
+        padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Colors.grey.shade200)),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: border),
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: GoogleFonts.poppins(
-                      fontSize: 8.5,
-                      color: Colors.grey.shade600,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-                Icon(icon, size: 13, color: iconColor),
-              ],
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: tint,
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Icon(icon, size: 16, color: iconColor),
             ),
-            const SizedBox(height: 4),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerLeft,
-              child: Text(value,
-                  style: GoogleFonts.poppins(
-                      fontSize: 15, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 7),
+            Text(
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.poppins(
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+                color: iconColor,
+                height: 1.1,
+              ),
             ),
-            const SizedBox(height: 2),
-            Text(subtitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: GoogleFonts.poppins(
-                    fontSize: 8,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.grey.shade500)),
+            const SizedBox(height: 3),
+            Text(
+              title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.poppins(
+                fontSize: 9.5,
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFF243247),
+              ),
+            ),
+            Text(
+              subtitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.poppins(
+                fontSize: 8,
+                color: Colors.grey.shade500,
+              ),
+            ),
           ],
         ),
       ),
@@ -5289,125 +5297,341 @@ class _LineGraphPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
+
     final gridPaint = Paint()
       ..color = Colors.grey.shade200
       ..strokeWidth = 1;
-
-    final linePaint = Paint()
-      ..color = AppColors.primaryBlue
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
-    final fillPaint = Paint()
-      ..style = PaintingStyle.fill
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          AppColors.primaryBlue.withValues(alpha: 0.3),
-          AppColors.primaryBlue.withValues(alpha: 0.01),
-        ],
-      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
-
-    final dotPaint = Paint()..color = AppColors.primaryBlue;
-    final innerDotPaint = Paint()..color = Colors.white;
-
     for (int i = 0; i <= 3; i++) {
       final y = size.height * (i / 3);
       canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
     }
 
-    if (dataPoints.isEmpty) return;
+    if (dataPoints.length < 2) return;
 
     final double stepX = size.width / (dataPoints.length - 1);
     final List<Offset> points = [];
-
     for (int i = 0; i < dataPoints.length; i++) {
-      final x = i * stepX;
       final y = size.height -
-          (dataPoints[i] * size.height * 0.8) -
-          (size.height * 0.1);
-      points.add(Offset(x, y));
+          (dataPoints[i].clamp(0.0, 1.0) * size.height * 0.68) -
+          (size.height * 0.18);
+      points.add(Offset(i * stepX, y));
     }
 
-    final path = Path();
-    final fillPath = Path();
-
-    path.moveTo(points[0].dx, points[0].dy);
-    fillPath.moveTo(points[0].dx, size.height);
-    fillPath.lineTo(points[0].dx, points[0].dy);
+    final path = Path()..moveTo(points[0].dx, points[0].dy);
+    final fillPath = Path()
+      ..moveTo(points[0].dx, size.height)
+      ..lineTo(points[0].dx, points[0].dy);
 
     for (int i = 0; i < points.length - 1; i++) {
       final p1 = points[i];
       final p2 = points[i + 1];
-      final controlP1 = Offset(p1.dx + (p2.dx - p1.dx) / 2, p1.dy);
-      final controlP2 = Offset(p1.dx + (p2.dx - p1.dx) / 2, p2.dy);
+      final cx = p1.dx + (p2.dx - p1.dx) / 2;
+      path.cubicTo(cx, p1.dy, cx, p2.dy, p2.dx, p2.dy);
+      fillPath.cubicTo(cx, p1.dy, cx, p2.dy, p2.dx, p2.dy);
+    }
+    fillPath
+      ..lineTo(points.last.dx, size.height)
+      ..close();
 
-      path.cubicTo(
-          controlP1.dx, controlP1.dy, controlP2.dx, controlP2.dy, p2.dx, p2.dy);
-      fillPath.cubicTo(
-          controlP1.dx, controlP1.dy, controlP2.dx, controlP2.dy, p2.dx, p2.dy);
+    // colorful soft area under the line
+    canvas.drawPath(
+      fillPath,
+      Paint()
+        ..style = PaintingStyle.fill
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            BlueUI.sky.withValues(alpha: 0.35),
+            BlueUI.mid.withValues(alpha: 0.12),
+            BlueUI.mid.withValues(alpha: 0.0),
+          ],
+        ).createShader(rect),
+    );
+
+    // line with a teal -> blue gradient
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.5
+        ..strokeCap = StrokeCap.round
+        ..shader = const LinearGradient(
+          colors: [BlueUI.sky, BlueUI.mid],
+        ).createShader(rect),
+    );
+
+    // small dots; the latest point is highlighted and shows its value
+    for (int i = 0; i < points.length; i++) {
+      final bool isLast = i == points.length - 1;
+      final p = points[i];
+
+      if (isLast) {
+        canvas.drawCircle(
+            p, 11, Paint()..color = BlueUI.mid.withValues(alpha: 0.18));
+        canvas.drawCircle(p, 6, Paint()..color = BlueUI.mid);
+        canvas.drawCircle(p, 2.6, Paint()..color = Colors.white);
+      } else {
+        canvas.drawCircle(p, 4.5, Paint()..color = Colors.white);
+        canvas.drawCircle(
+          p,
+          4.5,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2
+            ..color = BlueUI.sky,
+        );
+      }
     }
 
-    fillPath.lineTo(points.last.dx, size.height);
-    fillPath.close();
-
-    canvas.drawPath(fillPath, fillPaint);
-    canvas.drawPath(path, linePaint);
-
-    for (var p in points) {
-      canvas.drawCircle(p, 5, dotPaint);
-      canvas.drawCircle(p, 2.5, innerDotPaint);
-    }
+    // Draw the latest attendance percentage last, in a solid pill above the
+    // final marker so it stays legible and never appears behind the graph line.
+    final latestPoint = points.last;
+    final valuePainter = TextPainter(
+      text: TextSpan(
+        text: '${(dataPoints.last * 100).round()}%',
+        style: const TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
+          color: AppColors.primaryBlue,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    const horizontalPadding = 7.0;
+    const verticalPadding = 4.0;
+    final pillWidth = valuePainter.width + horizontalPadding * 2;
+    final pillHeight = valuePainter.height + verticalPadding * 2;
+    final pillLeft = (latestPoint.dx - pillWidth / 2)
+        .clamp(0.0, size.width - pillWidth)
+        .toDouble();
+    final pillTop = (latestPoint.dy - pillHeight - 12)
+        .clamp(0.0, size.height - pillHeight)
+        .toDouble();
+    final pillRect = Rect.fromLTWH(pillLeft, pillTop, pillWidth, pillHeight);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(pillRect, const Radius.circular(8)),
+      Paint()..color = Colors.white,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(pillRect, const Radius.circular(8)),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = BlueUI.sky.withValues(alpha: 0.65),
+    );
+    valuePainter.paint(
+      canvas,
+      Offset(pillLeft + horizontalPadding, pillTop + verticalPadding),
+    );
   }
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
 
-class _PieChartPainter extends CustomPainter {
-  final double presentRatio, lateRatio, excusedRatio, absentRatio;
+class _ReasonRecordsPager extends StatefulWidget {
+  final List<Map<String, dynamic>> records;
+  final int pageSize;
+  final String category;
+  final String Function(String?, String?) formatDateTime;
 
-  _PieChartPainter({
-    required this.presentRatio,
-    required this.lateRatio,
-    required this.excusedRatio,
-    required this.absentRatio,
+  const _ReasonRecordsPager({
+    required this.records,
+    required this.pageSize,
+    required this.category,
+    required this.formatDateTime,
   });
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = min(size.width, size.height) / 2;
-    final rect = Rect.fromCircle(center: center, radius: radius);
+  State<_ReasonRecordsPager> createState() => _ReasonRecordsPagerState();
+}
 
-    final paint = Paint()..style = PaintingStyle.fill;
-    double startAngle = -pi / 2;
-
-    final total = presentRatio + lateRatio + excusedRatio + absentRatio;
-    if (total <= 0) return;
-
-    final presentSweep = (presentRatio / total) * 2 * pi;
-    paint.color = const Color(0xFF10B981);
-    canvas.drawArc(rect, startAngle, presentSweep, true, paint);
-    startAngle += presentSweep;
-
-    final lateSweep = (lateRatio / total) * 2 * pi;
-    paint.color = const Color(0xFFF59E0B);
-    canvas.drawArc(rect, startAngle, lateSweep, true, paint);
-    startAngle += lateSweep;
-
-    final excusedSweep = (excusedRatio / total) * 2 * pi;
-    paint.color = const Color(0xFF6366F1);
-    canvas.drawArc(rect, startAngle, excusedSweep, true, paint);
-    startAngle += excusedSweep;
-
-    final absentSweep = (absentRatio / total) * 2 * pi;
-    paint.color = const Color(0xFFEF4444);
-    canvas.drawArc(rect, startAngle, absentSweep, true, paint);
-  }
+class _ReasonRecordsPagerState extends State<_ReasonRecordsPager> {
+  int _page = 0;
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+  Widget build(BuildContext context) {
+    final totalPages = (widget.records.length / widget.pageSize).ceil();
+    final start = _page * widget.pageSize;
+    final end = (start + widget.pageSize).clamp(0, widget.records.length);
+    final pageRecords = widget.records.sublist(start, end);
+
+    return Expanded(
+      child: Column(
+        children: [
+          Expanded(
+            child: widget.records.isEmpty
+                ? Center(
+                    child: Text(
+                      'No detailed remarks found for "${widget.category}".',
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        color: Colors.grey.shade500,
+                      ),
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: pageRecords.length,
+                    itemBuilder: (context, index) {
+                      final r = pageRecords[index];
+                      final profile = r['profiles'];
+                      final name = profile?['full_name'] ?? 'Unknown Student';
+                      final schoolId = profile?['school_id'] ?? 'N/A';
+                      final classInfo = r['attendance_sessions']?['classes'];
+                      final courseCode = classInfo?['course_code'] ?? 'N/A';
+                      final courseName = classInfo?['course_name'] ?? 'N/A';
+                      final section = classInfo?['section'] ?? 'N/A';
+                      final status =
+                          (r['status'] ?? 'N/A').toString().toUpperCase();
+                      final remarks = (r['remarks'] ?? '').toString().trim();
+                      final formattedTime = widget.formatDateTime(
+                        r['scanned_at']?.toString(),
+                        r['attendance_sessions']?['date']?.toString(),
+                      );
+                      final statusColor = status == 'ABSENT'
+                          ? const Color(0xFFEF4444)
+                          : status == 'LATE'
+                              ? const Color(0xFFF59E0B)
+                              : const Color(0xFF16A34A);
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF8FAFC),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.grey.shade200),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Expanded(
+                                  child: Text(name.toString(),
+                                      style: GoogleFonts.poppins(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.bold,
+                                          color: AppColors.primaryBlue)),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: statusColor.withValues(alpha: 0.12),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(status,
+                                      style: GoogleFonts.poppins(
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.bold,
+                                          color: statusColor)),
+                                ),
+                              ],
+                            ),
+                            Text('ID: $schoolId',
+                                style: GoogleFonts.poppins(
+                                    fontSize: 10, color: Colors.grey.shade600)),
+                            const SizedBox(height: 8),
+                            Row(children: [
+                              const Icon(Icons.class_outlined,
+                                  size: 13, color: AppColors.primaryBlue),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                  child: Text(
+                                      '$courseCode - $courseName (Sec $section)',
+                                      overflow: TextOverflow.ellipsis,
+                                      style: GoogleFonts.poppins(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.grey.shade800))),
+                            ]),
+                            const SizedBox(height: 4),
+                            Row(children: [
+                              const Icon(Icons.access_time_rounded,
+                                  size: 13, color: AppColors.primaryBlue),
+                              const SizedBox(width: 6),
+                              Text(formattedTime,
+                                  style: GoogleFonts.poppins(
+                                      fontSize: 10,
+                                      color: Colors.grey.shade600)),
+                            ]),
+                            const SizedBox(height: 10),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                    color: AppColors.primaryBlue
+                                        .withValues(alpha: 0.2)),
+                              ),
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('REMARKS / EXPLANATION:',
+                                        style: GoogleFonts.poppins(
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.bold,
+                                            color: AppColors.primaryBlue)),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                        remarks.isNotEmpty
+                                            ? remarks
+                                            : 'No specific remarks entered.',
+                                        style: GoogleFonts.poppins(
+                                            fontSize: 11,
+                                            fontStyle: remarks.isNotEmpty
+                                                ? FontStyle.normal
+                                                : FontStyle.italic,
+                                            color: remarks.isNotEmpty
+                                                ? Colors.grey.shade800
+                                                : Colors.grey.shade400)),
+                                  ]),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          if (totalPages > 1) ...[
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('${start + 1}–$end of ${widget.records.length} students',
+                    style: GoogleFonts.poppins(
+                        fontSize: 10, color: Colors.grey.shade600)),
+                Row(children: [
+                  IconButton(
+                    tooltip: 'Previous page',
+                    onPressed: _page > 0 ? () => setState(() => _page--) : null,
+                    icon: const Icon(Icons.chevron_left_rounded),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  Text('Page ${_page + 1} of $totalPages',
+                      style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.primaryBlue)),
+                  IconButton(
+                    tooltip: 'Next page',
+                    onPressed: _page < totalPages - 1
+                        ? () => setState(() => _page++)
+                        : null,
+                    icon: const Icon(Icons.chevron_right_rounded),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ]),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }

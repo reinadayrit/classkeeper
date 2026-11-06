@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../constants/app_colors.dart';
 import '../../services/location_service.dart';
+import '../../widgets/date_range_calendar.dart';
 
 class StudentQrScreen extends StatefulWidget {
   const StudentQrScreen({super.key});
@@ -28,6 +29,15 @@ class _StudentQrScreenState extends State<StudentQrScreen> {
 
   late final MobileScannerController _scannerController;
 
+  late Future<List<Map<String, dynamic>>> _historyFuture;
+
+  // History filters + pagination
+  String? _filterClassId;
+  String _filterStatus = 'all';
+  DateTimeRange? _filterDateRange; // same calendar as the faculty screen
+  int _historyPage = 0;
+  static const int _historyPageSize = 5;
+
   SupabaseClient get _supabase => Supabase.instance.client;
 
   @override
@@ -38,6 +48,8 @@ class _StudentQrScreenState extends State<StudentQrScreen> {
       facing: CameraFacing.back,
       detectionSpeed: DetectionSpeed.noDuplicates,
     );
+
+    _historyFuture = _fetchAttendanceHistory();
   }
 
   @override
@@ -123,6 +135,157 @@ class _StudentQrScreenState extends State<StudentQrScreen> {
       'studentId': response['school_id'] ?? 'N/A',
       'email': response['email'] ?? user.email ?? 'N/A',
     };
+  }
+
+  // ---------------------------------------------------------
+  // ATTENDANCE HISTORY (DATA)
+  // ---------------------------------------------------------
+
+  Future<List<Map<String, dynamic>>> _fetchAttendanceHistory() async {
+    final user = _supabase.auth.currentUser;
+
+    if (user == null) {
+      throw Exception('No user currently logged in.');
+    }
+
+    final response = await _supabase
+        .from('attendance_records')
+        .select(
+          'id, status, scanned_at, remarks, reason_category, distance_meters, '
+          'attendance_sessions(date, class_id, '
+          'classes(id, course_code, course_name, section))',
+        )
+        .eq('student_id', user.id)
+        .order('scanned_at', ascending: false)
+        .limit(500)
+        .timeout(
+          const Duration(seconds: 10),
+          onTimeout: () => throw TimeoutException(
+            'Connection timed out while loading history.',
+          ),
+        );
+
+    return List<Map<String, dynamic>>.from(response);
+  }
+
+  void _refreshHistory() {
+    if (!mounted) return;
+
+    setState(() {
+      _historyFuture = _fetchAttendanceHistory();
+    });
+  }
+
+  Map<String, dynamic>? _asMap(dynamic value) {
+    if (value is Map) return Map<String, dynamic>.from(value);
+
+    if (value is List && value.isNotEmpty && value.first is Map) {
+      return Map<String, dynamic>.from(value.first as Map);
+    }
+
+    return null;
+  }
+
+  Map<String, dynamic>? _classOf(Map<String, dynamic> record) {
+    final session = _asMap(record['attendance_sessions']);
+    return _asMap(session?['classes']);
+  }
+
+  String? _classIdOf(Map<String, dynamic> record) {
+    final session = _asMap(record['attendance_sessions']);
+    final classData = _classOf(record);
+
+    return (classData?['id'] ?? session?['class_id'])?.toString();
+  }
+
+  String _formatHistoryDateTime(String? iso) {
+    final dt = iso == null ? null : DateTime.tryParse(iso)?.toLocal();
+
+    if (dt == null) return '--';
+
+    final hour12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final period = dt.hour >= 12 ? 'PM' : 'AM';
+
+    return '${_formatDateOnly(dt)} • $hour12:$minute $period';
+  }
+
+  String _formatDateOnly(DateTime dt) {
+    final m = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+
+    return '${dt.year}-$m-$d';
+  }
+
+  Color _statusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'present':
+        return const Color(0xFF41A564);
+      case 'late':
+        return Colors.orange.shade800;
+      case 'excused':
+        return Colors.blue.shade600;
+      case 'absent':
+        return const Color(0xFFE53935);
+      default:
+        return Colors.grey.shade600;
+    }
+  }
+
+  String _capitalize(String v) =>
+      v.isEmpty ? v : v[0].toUpperCase() + v.substring(1).toLowerCase();
+
+  List<Map<String, dynamic>> _applyHistoryFilters(
+    List<Map<String, dynamic>> records,
+  ) {
+    return records.where((r) {
+      if (_filterClassId != null && _classIdOf(r) != _filterClassId) {
+        return false;
+      }
+
+      if (_filterStatus != 'all' &&
+          (r['status']?.toString().toLowerCase() ?? '') != _filterStatus) {
+        return false;
+      }
+
+      if (_filterDateRange != null) {
+        final dt =
+            DateTime.tryParse(r['scanned_at']?.toString() ?? '')?.toLocal();
+
+        if (dt == null) return false;
+
+        final day = DateTime(dt.year, dt.month, dt.day);
+        final from = DateTime(
+          _filterDateRange!.start.year,
+          _filterDateRange!.start.month,
+          _filterDateRange!.start.day,
+        );
+        final to = DateTime(
+          _filterDateRange!.end.year,
+          _filterDateRange!.end.month,
+          _filterDateRange!.end.day,
+        );
+
+        if (day.isBefore(from) || day.isAfter(to)) return false;
+      }
+
+      return true;
+    }).toList();
+  }
+
+  Future<void> _pickFilterDate() async {
+    final DateRangeResult? result = await showDateRangeCalendar(
+      context,
+      initialRange: _filterDateRange,
+    );
+
+    // null = the sheet was closed without applying
+    if (result == null || !mounted) return;
+
+    setState(() {
+      _filterDateRange = result.range; // null = all dates
+      _historyPage = 0;
+    });
   }
 
   // ---------------------------------------------------------
@@ -427,6 +590,8 @@ class _StudentQrScreenState extends State<StudentQrScreen> {
           'Connection timeout while recording check-in.',
         ),
       );
+
+      _refreshHistory();
 
       final bool isLate = calculatedStatus == 'late';
 
@@ -779,6 +944,8 @@ class _StudentQrScreenState extends State<StudentQrScreen> {
 
           if (_selectedTab == 0) ...[
             _buildScanner(),
+            const SizedBox(height: 28),
+            _buildHistorySection(),
           ],
 
           if (_selectedTab == 1) ...[
@@ -1137,6 +1304,625 @@ class _StudentQrScreenState extends State<StudentQrScreen> {
           ),
         );
       },
+    );
+  }
+
+  // ---------------------------------------------------------
+  // ATTENDANCE HISTORY (UI)
+  // ---------------------------------------------------------
+
+  Widget _buildHistorySection() {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _historyFuture,
+      builder: (context, snapshot) {
+        final isLoading = snapshot.connectionState == ConnectionState.waiting;
+        final all = snapshot.data ?? <Map<String, dynamic>>[];
+        final filtered = _applyHistoryFilters(all);
+
+        final totalPages =
+            (filtered.length / _historyPageSize).ceil().clamp(1, 9999).toInt();
+        final int page = _historyPage.clamp(0, totalPages - 1).toInt();
+        final start = page * _historyPageSize;
+        final int end =
+            (start + _historyPageSize).clamp(0, filtered.length).toInt();
+        final pageItems = filtered.sublist(start, end);
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // HEADER
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'ATTENDANCE HISTORY',
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5,
+                        color: AppColors.primaryBlue,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '${filtered.length} ${filtered.length == 1 ? 'Record' : 'Records'}',
+                    style: GoogleFonts.poppins(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey.shade500,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  InkWell(
+                    onTap: _refreshHistory,
+                    borderRadius: BorderRadius.circular(20),
+                    child: const Padding(
+                      padding: EdgeInsets.all(4),
+                      child: Icon(
+                        Icons.refresh_rounded,
+                        size: 16,
+                        color: AppColors.primaryBlue,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+
+            // FILTERS
+            _buildHistoryFilters(all),
+            const SizedBox(height: 12),
+
+            // BODY
+            if (isLoading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 32),
+                child: Center(
+                  child: CircularProgressIndicator(
+                    color: AppColors.primaryBlue,
+                  ),
+                ),
+              )
+            else if (snapshot.hasError)
+              _buildHistoryMessage(
+                icon: Icons.wifi_off_rounded,
+                message: 'Could not load attendance history.',
+                actionLabel: 'Retry',
+                onAction: _refreshHistory,
+              )
+            else if (filtered.isEmpty)
+              _buildHistoryMessage(
+                icon: Icons.history_rounded,
+                message: all.isEmpty
+                    ? 'No attendance records yet.'
+                    : 'No records match your filters.',
+              )
+            else ...[
+              ...pageItems.map(_buildHistoryCard),
+              if (totalPages > 1)
+                _buildPagination(
+                  page: page,
+                  totalPages: totalPages,
+                  total: filtered.length,
+                  from: start + 1,
+                  to: end,
+                ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  // ---------------- FILTERS ----------------
+
+  Widget _buildHistoryFilters(List<Map<String, dynamic>> all) {
+    // Unique classes from the student's own records.
+    final Map<String, String> classOptions = {};
+
+    for (final r in all) {
+      final id = _classIdOf(r);
+      final c = _classOf(r);
+
+      if (id != null && c != null) {
+        final code = c['course_code']?.toString() ?? '';
+        final section = c['section']?.toString() ?? '';
+        classOptions[id] = section.isNotEmpty ? '$code ($section)' : code;
+      }
+    }
+
+    // Reset a stale class filter (e.g. after refresh).
+    final String? classValue =
+        classOptions.containsKey(_filterClassId) ? _filterClassId : null;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: _buildDropdownShell(
+                  child: DropdownButton<String?>(
+                    value: classValue,
+                    isExpanded: true,
+                    style: _filterTextStyle(),
+                    icon: const Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      size: 18,
+                      color: AppColors.primaryBlue,
+                    ),
+                    items: [
+                      const DropdownMenuItem<String?>(
+                        value: null,
+                        child: Text('All Classes'),
+                      ),
+                      ...classOptions.entries.map(
+                        (e) => DropdownMenuItem<String?>(
+                          value: e.key,
+                          child: Text(
+                            e.value,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    ],
+                    onChanged: (v) {
+                      setState(() {
+                        _filterClassId = v;
+                        _historyPage = 0;
+                      });
+                    },
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              _buildDropdownShell(
+                child: DropdownButton<String>(
+                  value: _filterStatus,
+                  style: _filterTextStyle(),
+                  icon: const Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    size: 18,
+                    color: AppColors.primaryBlue,
+                  ),
+                  items: const [
+                    'all',
+                    'present',
+                    'late',
+                    'absent',
+                    'excused',
+                  ]
+                      .map(
+                        (v) => DropdownMenuItem<String>(
+                          value: v,
+                          child: Text(
+                            v == 'all' ? 'All Status' : _capitalize(v),
+                          ),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) {
+                    setState(() {
+                      _filterStatus = v ?? 'all';
+                      _historyPage = 0;
+                    });
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          InkWell(
+            onTap: _pickFilterDate,
+            borderRadius: BorderRadius.circular(10),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 12,
+              ),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF4F6F9),
+                borderRadius: BorderRadius.circular(10),
+                border: _filterDateRange != null
+                    ? Border.all(color: AppColors.primaryBlue)
+                    : null,
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.calendar_month_rounded,
+                    size: 16,
+                    color: AppColors.primaryBlue,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      formatDateRangeLabel(_filterDateRange),
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.primaryBlue,
+                      ),
+                    ),
+                  ),
+                  if (_filterDateRange != null)
+                    GestureDetector(
+                      onTap: () {
+                        setState(() {
+                          _filterDateRange = null;
+                          _historyPage = 0;
+                        });
+                      },
+                      child: const Icon(
+                        Icons.close,
+                        size: 16,
+                        color: Colors.grey,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  TextStyle _filterTextStyle() => GoogleFonts.poppins(
+        fontSize: 11,
+        fontWeight: FontWeight.w600,
+        color: AppColors.primaryBlue,
+      );
+
+  Widget _buildDropdownShell({required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: DropdownButtonHideUnderline(child: child),
+    );
+  }
+
+  // ---------------- CARD ----------------
+
+  Widget _buildHistoryCard(Map<String, dynamic> record) {
+    final classData = _classOf(record);
+
+    final courseCode = classData?['course_code']?.toString() ?? '';
+    final courseName = classData?['course_name']?.toString() ?? 'Class';
+    final section = classData?['section']?.toString() ?? '';
+    final status = record['status']?.toString() ?? 'unknown';
+    final remarks = record['remarks']?.toString().trim() ?? '';
+    final reason = record['reason_category']?.toString().trim() ?? '';
+    final distance = record['distance_meters'] is num
+        ? (record['distance_meters'] as num).round()
+        : null;
+    final color = _statusColor(status);
+
+    final hasFooter =
+        distance != null || reason.isNotEmpty || remarks.isNotEmpty;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  if (courseCode.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.primaryBlue,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        courseCode,
+                        style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  if (section.isNotEmpty) ...[
+                    const SizedBox(width: 6),
+                    Text(
+                      'Sec $section',
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 3,
+                ),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: color.withValues(alpha: 0.6)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 5,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: color,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      _capitalize(status),
+                      style: GoogleFonts.poppins(
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        color: color,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            courseName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: GoogleFonts.poppins(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: const Color(0xFF0F172A),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Row(
+            children: [
+              const Icon(
+                Icons.access_time_rounded,
+                size: 12,
+                color: Colors.grey,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                _formatHistoryDateTime(record['scanned_at']?.toString()),
+                style: GoogleFonts.poppins(
+                  fontSize: 10,
+                  color: Colors.grey.shade500,
+                ),
+              ),
+            ],
+          ),
+          if (hasFooter) ...[
+            const SizedBox(height: 10),
+            const Divider(height: 1, color: Color(0xFFF1F5F9)),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                if (distance != null)
+                  _buildInfoPill(
+                    '${distance}m from room',
+                    const Color(0xFF475569),
+                    icon: Icons.location_on_outlined,
+                  ),
+                if (reason.isNotEmpty)
+                  _buildInfoPill(reason, Colors.blue.shade600),
+                if (remarks.isNotEmpty)
+                  Text(
+                    remarks,
+                    style: GoogleFonts.poppins(
+                      fontSize: 10,
+                      fontStyle: FontStyle.italic,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoPill(String text, Color color, {IconData? icon}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 11, color: color),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            text,
+            style: GoogleFonts.poppins(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHistoryMessage({
+    required IconData icon,
+    required String message,
+    String? actionLabel,
+    VoidCallback? onAction,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, size: 32, color: Colors.grey.shade400),
+          const SizedBox(height: 8),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.poppins(
+              fontSize: 11,
+              color: Colors.grey.shade500,
+            ),
+          ),
+          if (actionLabel != null)
+            TextButton(onPressed: onAction, child: Text(actionLabel)),
+        ],
+      ),
+    );
+  }
+
+  // ---------------- PAGINATION ----------------
+
+  Widget _buildPagination({
+    required int page,
+    required int totalPages,
+    required int total,
+    required int from,
+    required int to,
+  }) {
+    int windowStart = (page - 2).clamp(0, totalPages).toInt();
+    int windowEnd = (windowStart + 5).clamp(0, totalPages).toInt();
+    windowStart = (windowEnd - 5).clamp(0, totalPages).toInt();
+
+    Widget pageButton({
+      required Widget child,
+      required VoidCallback? onTap,
+      bool active = false,
+    }) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 3),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            width: 34,
+            height: 34,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: active ? AppColors.primaryBlue : Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: active ? AppColors.primaryBlue : Colors.grey.shade300,
+              ),
+            ),
+            child: child,
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Column(
+        children: [
+          Text(
+            'Showing $from–$to of $total',
+            style: GoogleFonts.poppins(
+              fontSize: 10.5,
+              color: Colors.grey.shade500,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              pageButton(
+                onTap: page > 0
+                    ? () => setState(() => _historyPage = page - 1)
+                    : null,
+                child: Icon(
+                  Icons.chevron_left_rounded,
+                  size: 20,
+                  color:
+                      page > 0 ? AppColors.primaryBlue : Colors.grey.shade400,
+                ),
+              ),
+              for (int i = windowStart; i < windowEnd; i++)
+                pageButton(
+                  active: i == page,
+                  onTap: () => setState(() => _historyPage = i),
+                  child: Text(
+                    '${i + 1}',
+                    style: GoogleFonts.poppins(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: i == page ? Colors.white : AppColors.primaryBlue,
+                    ),
+                  ),
+                ),
+              pageButton(
+                onTap: page < totalPages - 1
+                    ? () => setState(() => _historyPage = page + 1)
+                    : null,
+                child: Icon(
+                  Icons.chevron_right_rounded,
+                  size: 20,
+                  color: page < totalPages - 1
+                      ? AppColors.primaryBlue
+                      : Colors.grey.shade400,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

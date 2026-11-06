@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../constants/app_colors.dart';
 import '../../services/schedule_utils.dart';
+import '../../widgets/analytics_ui.dart';
 import 'student_profile_screen.dart';
 
 class StudentDashboardScreen extends StatefulWidget {
@@ -37,6 +38,10 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   List<Map<String, dynamic>> _classRates = [];
   List<Map<String, dynamic>> _needsReason = [];
   String _nextClassHint = '';
+
+  // Running attendance rate after each session (last 10), for the chart
+  List<double> _trendPoints = [];
+  List<String> _trendLabels = [];
 
   // Lists for dynamic rendering
   List<Map<String, dynamic>> _todayClasses = [];
@@ -117,9 +122,8 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
 
       // 3. Attendance history & metrics
       try {
-        final List<dynamic> attendanceRes = await _supabase
-            .from('attendance_records')
-            .select('''
+        final List<dynamic> attendanceRes =
+            await _supabase.from('attendance_records').select('''
               id,
               status,
               reason_category,
@@ -133,8 +137,7 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                   course_name
                 )
               )
-            ''')
-            .eq('student_id', user.id);
+            ''').eq('student_id', user.id);
 
         final List<Map<String, dynamic>> records = attendanceRes
             .map((e) => Map<String, dynamic>.from(e as Map))
@@ -225,6 +228,22 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                 : a['code'].toString().compareTo(b['code'].toString());
           });
 
+        // Running attendance rate after each session, oldest to newest
+        final chronological = records.reversed.toList();
+        int attendedSoFar = 0;
+        final List<double> running = [];
+        final List<String> labels = [];
+        for (int i = 0; i < chronological.length; i++) {
+          final st = chronological[i]['status']?.toString().toLowerCase() ?? '';
+          if (st != 'absent') attendedSoFar++;
+          running.add(attendedSoFar / (i + 1));
+          final d = recordDate(chronological[i]);
+          labels.add(d == null ? '' : '${d.month}/${d.day}');
+        }
+        final int keep = running.length > 10 ? 10 : running.length;
+        _trendPoints = running.sublist(running.length - keep);
+        _trendLabels = labels.sublist(labels.length - keep);
+
         _attendanceHistory = records;
       } catch (e) {
         debugPrint('Attendance query error: $e');
@@ -237,6 +256,8 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
         _streak = 0;
         _classRates = [];
         _needsReason = [];
+        _trendPoints = [];
+        _trendLabels = [];
         _attendanceHistory = [];
       }
 
@@ -244,14 +265,15 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
       final int todayWeekday = DateTime.now().weekday;
 
       int startMinutes(Map<String, dynamic> cls) {
-        final t = ScheduleUtils.parseStartTime((cls['schedule'] ?? '').toString());
+        final t =
+            ScheduleUtils.parseStartTime((cls['schedule'] ?? '').toString());
         return t == null ? 0 : t.hour * 60 + t.minute;
       }
 
       final todaysList = enrolledClasses
-          .where((cls) => ScheduleUtils.parseWeekdays(
-                  (cls['schedule'] ?? '').toString())
-              .contains(todayWeekday))
+          .where((cls) =>
+              ScheduleUtils.parseWeekdays((cls['schedule'] ?? '').toString())
+                  .contains(todayWeekday))
           .toList()
         ..sort((a, b) => startMinutes(a).compareTo(startMinutes(b)));
 
@@ -372,7 +394,8 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (dialogCtx, setDialogState) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Text('Submit Absence/Late Reason',
               style: GoogleFonts.poppins(
                   fontSize: 14,
@@ -409,8 +432,8 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   filled: true,
                   fillColor: const Color(0xFFF8FAFC),
-                  border:
-                      OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10)),
                 ),
               ),
               const SizedBox(height: 12),
@@ -430,8 +453,8 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                       fontSize: 11, color: Colors.grey.shade400),
                   filled: true,
                   fillColor: const Color(0xFFF8FAFC),
-                  border:
-                      OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10)),
                 ),
               ),
             ],
@@ -498,7 +521,8 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                         if (mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                              content: Text('Reason submitted to your teacher.'),
+                              content:
+                                  Text('Reason submitted to your teacher.'),
                             ),
                           );
                           _fetchDashboardData();
@@ -788,7 +812,20 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                     const SizedBox(height: 12),
                     _buildQuickActions(),
                     const SizedBox(height: 24),
-                    _buildSectionTitle('ATTENDANCE OVERVIEW'),
+                    Row(
+                      children: [
+                        _buildSectionTitle('METRICS & USAGE'),
+                        const SizedBox(width: 6),
+                        GestureDetector(
+                          onTap: _showFormulaInfo,
+                          child: const Icon(
+                            Icons.info_outline_rounded,
+                            size: 16,
+                            color: AppColors.primaryBlue,
+                          ),
+                        ),
+                      ],
+                    ),
                     const SizedBox(height: 12),
                     _buildUsageProgressCards(),
                     const SizedBox(height: 24),
@@ -798,6 +835,12 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                       _buildNeedsReasonCard(),
                       const SizedBox(height: 24),
                     ],
+                    _buildSectionTitle('ATTENDANCE ANALYTICS'),
+                    const SizedBox(height: 12),
+                    _buildTrendCard(),
+                    const SizedBox(height: 12),
+                    _buildAttendanceGraph(),
+                    const SizedBox(height: 24),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -818,10 +861,6 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                     const SizedBox(height: 12),
                     _buildPaginatedTodayClasses(),
                     const SizedBox(height: 24),
-                    _buildSectionTitle('ATTENDANCE BY CLASS'),
-                    const SizedBox(height: 12),
-                    _buildAttendanceGraph(),
-                    const SizedBox(height: 24),
                     _buildSectionTitle('RECENT ATTENDANCE RECORDS'),
                     const SizedBox(height: 12),
                     _buildPaginatedAttendanceRecords(),
@@ -837,6 +876,46 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  void _showFormulaInfo() {
+    showFormulaSheet(
+      context,
+      title: 'How these are computed',
+      subtitle: 'Simple formulas for your attendance',
+      items: const [
+        FormulaItem(
+          icon: Icons.pie_chart_rounded,
+          color: AnalyticsColors.present,
+          title: 'Attendance rate',
+          formula: '(Present + Late + Excused) / All your records x 100',
+          example:
+              'Late still counts because you attended. Example: 18 attended out of 20 sessions = 90%.',
+        ),
+        FormulaItem(
+          icon: Icons.emoji_events_outlined,
+          color: AnalyticsColors.blue,
+          title: 'Rating',
+          formula: '90%+ Excellent, 75%+ Good, 60%+ Needs improvement',
+          example: 'Below 60% is shown as "At risk".',
+        ),
+        FormulaItem(
+          icon: Icons.local_fire_department_rounded,
+          color: AnalyticsColors.orange,
+          title: 'Streak',
+          formula: 'Sessions in a row, newest first, until your last absence',
+          example:
+              'Present, late and excused all keep the streak going. An absence resets it.',
+        ),
+        FormulaItem(
+          icon: Icons.class_rounded,
+          color: AnalyticsColors.teal,
+          title: 'Attendance by class',
+          formula: 'For each class: attended / all records x 100',
+          example: 'Green is 85% or more, amber is 70-84%, red is below 70%.',
+        ),
+      ],
     );
   }
 
@@ -924,59 +1003,26 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   Widget _buildUsageProgressCards() {
     final double ratio = (_attendanceRate / 100).clamp(0.0, 1.0);
 
-    final String label;
-    final Color color;
+    final String standing;
+    final Color standingColor;
     if (!_hasRecords) {
-      label = 'No records yet';
-      color = Colors.grey;
+      standing = 'No records yet';
+      standingColor = Colors.grey.shade500;
     } else if (_attendanceRate >= 90) {
-      label = 'Excellent';
-      color = const Color(0xFF10B981);
+      standing = 'Excellent';
+      standingColor = Colors.green.shade600;
     } else if (_attendanceRate >= 75) {
-      label = 'Good';
-      color = const Color(0xFF3B82F6);
+      standing = 'Good standing';
+      standingColor = Colors.green.shade600;
     } else if (_attendanceRate >= 60) {
-      label = 'Needs improvement';
-      color = const Color(0xFFF59E0B);
+      standing = 'Needs improvement';
+      standingColor = Colors.orange.shade700;
     } else {
-      label = 'At risk';
-      color = const Color(0xFFEF4444);
-    }
-
-    Widget countTile(String name, int value, Color c) {
-      return Expanded(
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          decoration: BoxDecoration(
-            color: c.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Column(
-            children: [
-              Text(
-                '$value',
-                style: GoogleFonts.poppins(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: c,
-                ),
-              ),
-              Text(
-                name,
-                style: GoogleFonts.poppins(
-                  fontSize: 9.5,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.grey.shade700,
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
+      standing = 'At risk';
+      standingColor = Colors.red.shade600;
     }
 
     return Container(
-      width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -987,94 +1033,234 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(
-                _hasRecords ? '${_attendanceRate.toStringAsFixed(1)}%' : '—',
-                style: GoogleFonts.poppins(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: const Color(0xFF0F172A),
-                  height: 1.1,
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEFF6FF),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.add_task_rounded,
+                  color: AppColors.primaryBlue,
+                  size: 20,
                 ),
               ),
               const SizedBox(width: 10),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    label,
-                    style: GoogleFonts.poppins(
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      color: color,
-                    ),
-                  ),
+              Text(
+                'Overall Attendance Rate',
+                style: GoogleFonts.poppins(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: const Color(0xFF0F172A),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 2),
-          Text(
-            'Present, late or excused, across $_enrolledClassesCount '
-            'class${_enrolledClassesCount == 1 ? '' : 'es'}',
-            style: GoogleFonts.poppins(
-              fontSize: 10,
-              color: Colors.grey.shade500,
-            ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                _hasRecords
+                    ? '${_attendanceRate.toStringAsFixed(0)}% Rate'
+                    : '— Rate',
+                style: GoogleFonts.poppins(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.primaryBlue,
+                ),
+              ),
+              Text(
+                standing,
+                style: GoogleFonts.poppins(
+                  fontSize: 11,
+                  color: standingColor,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 6),
           ClipRRect(
             borderRadius: BorderRadius.circular(6),
             child: LinearProgressIndicator(
               value: _hasRecords ? ratio : 0,
               minHeight: 8,
               backgroundColor: Colors.grey.shade100,
-              valueColor: AlwaysStoppedAnimation<Color>(color),
+              valueColor: const AlwaysStoppedAnimation<Color>(
+                AppColors.primaryBlue,
+              ),
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 16),
+          const Divider(height: 1),
+          const SizedBox(height: 16),
           Row(
             children: [
-              countTile('Present', _presentCount, const Color(0xFF10B981)),
+              Expanded(
+                child: MiniMetricTile(
+                  vertical: true,
+                  icon: Icons.school_rounded,
+                  title: 'Enrolled Classes',
+                  value:
+                      '$_enrolledClassesCount Course${_enrolledClassesCount == 1 ? '' : 's'}',
+                ),
+              ),
               const SizedBox(width: 8),
-              countTile('Late', _lateCount, const Color(0xFFF59E0B)),
+              Expanded(
+                child: MiniMetricTile(
+                  vertical: true,
+                  icon: Icons.cancel_outlined,
+                  title: 'Total Absents',
+                  value: '$_absentCount Session${_absentCount == 1 ? '' : 's'}',
+                ),
+              ),
               const SizedBox(width: 8),
-              countTile('Excused', _excusedCount, const Color(0xFF8B5CF6)),
-              const SizedBox(width: 8),
-              countTile('Absent', _absentCount, const Color(0xFFEF4444)),
+              Expanded(
+                child: MiniMetricTile(
+                  vertical: true,
+                  icon: Icons.access_time_rounded,
+                  title: 'Total Lates',
+                  value: '$_lateCount Session${_lateCount == 1 ? '' : 's'}',
+                ),
+              ),
             ],
           ),
-          if (_hasRecords) ...[
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Icon(
-                  Icons.local_fire_department_rounded,
-                  size: 16,
-                  color: _streak > 0
-                      ? const Color(0xFFF97316)
-                      : Colors.grey.shade400,
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: MiniMetricTile(
+                  vertical: true,
+                  icon: Icons.check_circle_outline_rounded,
+                  title: 'Present',
+                  value:
+                      '$_presentCount Session${_presentCount == 1 ? '' : 's'}',
                 ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    _streak == 0
-                        ? 'Your last session was an absence. Start a new streak next class.'
-                        : 'Streak: $_streak session${_streak == 1 ? '' : 's'} in a row without an absence',
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: MiniMetricTile(
+                  vertical: true,
+                  icon: Icons.verified_outlined,
+                  title: 'Excused',
+                  value:
+                      '$_excusedCount Session${_excusedCount == 1 ? '' : 's'}',
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: MiniMetricTile(
+                  vertical: true,
+                  icon: Icons.local_fire_department_outlined,
+                  title: 'Streak',
+                  value: '$_streak Session${_streak == 1 ? '' : 's'}',
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// "Attendance Overview" line chart, using the student's real records.
+  Widget _buildTrendCard() {
+    final bool enough = _trendPoints.length >= 2;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Attendance Overview',
                     style: GoogleFonts.poppins(
-                      fontSize: 10.5,
-                      color: Colors.grey.shade700,
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFF0F172A),
                     ),
                   ),
+                  Text(
+                    enough
+                        ? 'Your attendance rate after each of the last ${_trendPoints.length} sessions'
+                        : 'Your attendance rate over time',
+                    style: GoogleFonts.poppins(
+                      fontSize: 10.5,
+                      color: Colors.grey.shade500,
+                    ),
+                  ),
+                ],
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEFF6FF),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-              ],
+                child: Text(
+                  _hasRecords ? '${_attendanceRate.toStringAsFixed(0)}%' : '—',
+                  style: GoogleFonts.poppins(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.primaryBlue,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          if (!enough)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Center(
+                child: Text(
+                  'Attend a few more sessions to see your trend.',
+                  style: GoogleFonts.poppins(
+                    fontSize: 11,
+                    color: Colors.grey.shade500,
+                  ),
+                ),
+              ),
+            )
+          else ...[
+            SizedBox(
+              height: 90,
+              width: double.infinity,
+              child: CustomPaint(
+                painter: _TrendPainter(
+                  points: _trendPoints,
+                  lineColor: AppColors.primaryBlue,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: _trendLabels
+                  .map(
+                    (d) => Text(
+                      d,
+                      style: GoogleFonts.poppins(
+                        fontSize: 9,
+                        color: Colors.grey.shade500,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  )
+                  .toList(),
             ),
           ],
         ],
@@ -1091,8 +1277,18 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
       final d = DateTime.tryParse(session?['date']?.toString() ?? '');
       if (d == null) return '';
       const months = [
-        'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec',
       ];
       return '${months[d.month - 1]} ${d.day}, ${d.year}';
     }
@@ -1130,7 +1326,8 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                         Text(
                           (((r['attendance_sessions']
                                           as Map<String, dynamic>?)?['classes']
-                                      as Map<String, dynamic>?)?['course_code'] ??
+                                      as Map<String,
+                                          dynamic>?)?['course_code'] ??
                                   'Class')
                               .toString(),
                           style: GoogleFonts.poppins(
@@ -1200,11 +1397,7 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
       return _buildEmptyTile('No attendance recorded yet.');
     }
 
-    Color colorFor(double r) {
-      if (r >= 0.85) return const Color(0xFF10B981);
-      if (r >= 0.70) return const Color(0xFFF59E0B);
-      return const Color(0xFFEF4444);
-    }
+    Color colorFor(double r) => AppColors.primaryBlue;
 
     return Container(
       width: double.infinity,
@@ -1215,7 +1408,24 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
         border: Border.all(color: Colors.grey.shade200),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Text(
+            'Attendance by Class',
+            style: GoogleFonts.poppins(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: const Color(0xFF0F172A),
+            ),
+          ),
+          Text(
+            'Present, late or excused sessions in each class',
+            style: GoogleFonts.poppins(
+              fontSize: 10.5,
+              color: Colors.grey.shade500,
+            ),
+          ),
+          const SizedBox(height: 14),
           for (int i = 0; i < _classRates.length; i++) ...[
             InkWell(
               onTap: () => widget.onTabSelected?.call(1),
@@ -1734,4 +1944,70 @@ class AnnouncementTile extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Smooth blue line chart for the student's real attendance trend.
+class _TrendPainter extends CustomPainter {
+  final List<double> points; // 0..1
+  final Color lineColor;
+
+  _TrendPainter({required this.points, required this.lineColor});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (points.length < 2) return;
+
+    final double stepX = size.width / (points.length - 1);
+    final List<Offset> offsets = [];
+    for (int i = 0; i < points.length; i++) {
+      final y = size.height -
+          (points[i].clamp(0.0, 1.0) * size.height * 0.8) -
+          (size.height * 0.1);
+      offsets.add(Offset(i * stepX, y));
+    }
+
+    final path = Path()..moveTo(offsets[0].dx, offsets[0].dy);
+    for (int i = 1; i < offsets.length; i++) {
+      final p0 = offsets[i - 1];
+      final p1 = offsets[i];
+      final cx = p0.dx + (p1.dx - p0.dx) / 2;
+      path.cubicTo(cx, p0.dy, cx, p1.dy, p1.dx, p1.dy);
+    }
+
+    final fillPath = Path.from(path)
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+
+    canvas.drawPath(
+      fillPath,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            lineColor.withValues(alpha: 0.20),
+            lineColor.withValues(alpha: 0.0),
+          ],
+        ).createShader(Rect.fromLTWH(0, 0, size.width, size.height)),
+    );
+
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = lineColor
+        ..strokeWidth = 3.0
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round,
+    );
+
+    for (final p in offsets) {
+      canvas.drawCircle(p, 4.5, Paint()..color = lineColor);
+      canvas.drawCircle(p, 2.0, Paint()..color = Colors.white);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _TrendPainter oldDelegate) =>
+      oldDelegate.points != points;
 }

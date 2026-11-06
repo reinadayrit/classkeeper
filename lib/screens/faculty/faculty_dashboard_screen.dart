@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../constants/app_colors.dart';
 import '../../services/faculty_notice_refresh.dart';
 import '../../services/schedule_utils.dart';
+import '../../widgets/analytics_ui.dart';
 
 /// Data model matching Supabase 'classes' schema
 class FacultyClassItem {
@@ -565,7 +566,8 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
                   const SizedBox(height: 12),
                   _buildQuickActions(),
                   const SizedBox(height: 24),
-                  _buildSectionTitle('OVERVIEW'),
+                  _buildSectionTitleWithInfo(
+                      'METRICS & USAGE', _showFormulaInfo),
                   const SizedBox(height: 12),
                   _buildUsageProgressCards(),
                   const SizedBox(height: 24),
@@ -573,11 +575,11 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
                   const SizedBox(height: 12),
                   _buildTodaySchedule(),
                   const SizedBox(height: 24),
-                  _buildSectionTitle('NEEDS ATTENTION'),
+                  _buildSectionTitle('ATTENTION REQUIRED'),
                   const SizedBox(height: 12),
                   _buildAttentionCard(context),
                   const SizedBox(height: 24),
-                  _buildSectionTitle('ATTENDANCE BY DAY'),
+                  _buildSectionTitle('ATTENDANCE ANALYTICS'),
                   const SizedBox(height: 12),
                   _buildAnalyticsCard(context),
                   const SizedBox(height: 24),
@@ -628,6 +630,71 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
     );
   }
 
+  /// Section title with a small "how is this computed?" button.
+  Widget _buildSectionTitleWithInfo(String title, VoidCallback onInfo) {
+    return Row(
+      children: [
+        _buildSectionTitle(title),
+        const SizedBox(width: 6),
+        GestureDetector(
+          onTap: onInfo,
+          child: const Icon(
+            Icons.info_outline_rounded,
+            size: 16,
+            color: AppColors.primaryBlue,
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _showFormulaInfo() {
+    showFormulaSheet(
+      context,
+      title: 'How these are computed',
+      subtitle: 'Simple formulas used on this dashboard',
+      items: const [
+        FormulaItem(
+          icon: Icons.pie_chart_rounded,
+          color: AnalyticsColors.present,
+          title: 'Attendance (average)',
+          formula: '(Present + Late + Excused) / All records x 100',
+          example:
+              'Late students still came to class, so they count as attended. Example: 95 attended out of 100 records = 95%.',
+        ),
+        FormulaItem(
+          icon: Icons.warning_amber_rounded,
+          color: AnalyticsColors.absent,
+          title: 'Students at risk',
+          formula: 'Students with 2 or more ABSENT records',
+          example: 'Excused absences do not count against the student.',
+        ),
+        FormulaItem(
+          icon: Icons.mark_email_unread_outlined,
+          color: AnalyticsColors.late,
+          title: 'Excuse letters waiting',
+          formula: 'Letters with status "pending"',
+          example: 'They leave this count when you approve or reject them.',
+        ),
+        FormulaItem(
+          icon: Icons.calendar_view_week_rounded,
+          color: AnalyticsColors.blue,
+          title: 'Attendance by Day',
+          formula: 'For each weekday: attended / all records x 100',
+          example:
+              'Uses every session held on that weekday. A dash means no class was held.',
+        ),
+        FormulaItem(
+          icon: Icons.class_rounded,
+          color: AnalyticsColors.teal,
+          title: 'Attendance by Class',
+          formula: 'For each class: attended / all records x 100',
+          example: 'Green is 85% or more, amber is 70-84%, red is below 70%.',
+        ),
+      ],
+    );
+  }
+
   Widget _buildQuickActions() {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -665,205 +732,306 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
   }
 
   Widget _buildUsageProgressCards() {
-    final String avgText =
-        _avgAttendance == null ? '—' : '${_avgAttendance!.toStringAsFixed(1)}%';
+    final String avgText = _avgAttendance == null
+        ? 'No records yet'
+        : '${_avgAttendance!.toStringAsFixed(1)}% Attended';
 
-    return Row(
-      children: [
-        Expanded(
-          child: _buildStatTile(
-            icon: Icons.groups_rounded,
-            label: 'Students',
-            value: '$_totalStudents',
-            caption: 'enrolled',
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _buildStatTile(
-            icon: Icons.class_rounded,
-            label: 'Classes',
-            value: '${_classList.length}',
-            caption: 'active',
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _buildStatTile(
-            icon: Icons.pie_chart_rounded,
-            label: 'Attendance',
-            value: avgText,
-            caption: _avgAttendance == null ? 'no records yet' : 'average',
-          ),
-        ),
-      ],
-    );
-  }
+    // Shades of blue for each class in the enrollment bar
+    const shades = [
+      AppColors.primaryBlue,
+      Color(0xFF2563EB),
+      Color(0xFF60A5FA),
+      Color(0xFF93C5FD),
+    ];
 
-  Widget _buildStatTile({
-    required IconData icon,
-    required String label,
-    required String value,
-    required String caption,
-  }) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: Colors.grey.shade200),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: const Color(0xFFEFF6FF),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, color: AppColors.primaryBlue, size: 18),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEFF6FF),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.groups_rounded,
+                  color: AppColors.primaryBlue,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                'Total Enrolled Students',
+                style: GoogleFonts.poppins(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: const Color(0xFF0F172A),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 10),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Text(
-              value,
-              style: GoogleFonts.poppins(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF0F172A),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '$_totalStudents Students',
+                style: GoogleFonts.poppins(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.primaryBlue,
+                ),
               ),
+              Text(
+                'across ${_classList.length} class${_classList.length == 1 ? '' : 'es'}',
+                style: GoogleFonts.poppins(
+                  fontSize: 11,
+                  color: Colors.grey.shade500,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+
+          // One blue segment per class, sized by its number of students
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: SizedBox(
+              height: 8,
+              child: _totalStudents == 0
+                  ? Container(color: Colors.grey.shade100)
+                  : Row(
+                      children: [
+                        for (int i = 0; i < _classList.length; i++)
+                          if (_classList[i].enrolledInt > 0)
+                            Expanded(
+                              flex: _classList[i].enrolledInt,
+                              child: Container(
+                                margin: EdgeInsets.only(
+                                  right: i == _classList.length - 1 ? 0 : 2,
+                                ),
+                                color: shades[i % shades.length],
+                              ),
+                            ),
+                      ],
+                    ),
             ),
           ),
-          Text(
-            label,
-            style: GoogleFonts.poppins(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: const Color(0xFF334155),
+          if (_classList.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 12,
+              runSpacing: 4,
+              children: [
+                for (int i = 0; i < _classList.length; i++)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: shades[i % shades.length],
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 5),
+                      Text(
+                        '${_classList[i].code}  ${_classList[i].enrolledInt}',
+                        style: GoogleFonts.poppins(
+                          fontSize: 9.5,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+              ],
             ),
+          ],
+          const SizedBox(height: 16),
+          const Divider(height: 1),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: MiniMetricTile(
+                  icon: Icons.class_rounded,
+                  title: 'Active Classes',
+                  value: '${_classList.length} Courses',
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: MiniMetricTile(
+                  icon: Icons.pie_chart_rounded,
+                  title: 'Avg Attendance',
+                  value: avgText,
+                ),
+              ),
+            ],
           ),
-          Text(
-            caption,
-            style: GoogleFonts.poppins(
-              fontSize: 9.5,
-              color: Colors.grey.shade500,
-            ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: MiniMetricTile(
+                  icon: Icons.person_off_outlined,
+                  title: 'At-Risk Students',
+                  value: '$_atRiskStudentsCount Students',
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: MiniMetricTile(
+                  icon: Icons.mark_email_unread_outlined,
+                  title: 'Excuse Letters',
+                  value: '$_pendingExcuseCount Pending',
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  /// Things the teacher can act on, with real counts.
+  /// Alerts the teacher can act on, with real counts (red card like before).
   Widget _buildAttentionCard(BuildContext context) {
-    Widget row({
-      required IconData icon,
-      required Color color,
-      required String text,
-      required int tab,
-    }) {
-      return InkWell(
-        onTap: () => widget.onTabSelected(tab),
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.12),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(icon, color: color, size: 18),
+    final alerts = <Map<String, dynamic>>[
+      if (_atRiskStudentsCount > 0)
+        {
+          'icon': Icons.person_off_outlined,
+          'text':
+              '$_atRiskStudentsCount student${_atRiskStudentsCount == 1 ? '' : 's'} with 2 or more absences',
+          'tab': 3,
+        },
+      if (_pendingExcuseCount > 0)
+        {
+          'icon': Icons.mark_email_unread_outlined,
+          'text':
+              '$_pendingExcuseCount excuse letter${_pendingExcuseCount == 1 ? '' : 's'} waiting for review',
+          'tab': 3,
+        },
+      if (_openSessionCount > 0)
+        {
+          'icon': Icons.qr_code_2_rounded,
+          'text':
+              '$_openSessionCount attendance session${_openSessionCount == 1 ? '' : 's'} still open',
+          'tab': 2,
+        },
+    ];
+
+    // Nothing to worry about: calm blue and white card
+    if (alerts.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFFEFF6FF),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFBFDBFE)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.primaryBlue.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  text,
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: const Color(0xFF1E293B),
-                  ),
+              child: const Icon(Icons.check_circle_outline_rounded,
+                  color: AppColors.primaryBlue, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                "You're all caught up. No students at risk, no excuse letters to review and no open sessions.",
+                style: GoogleFonts.poppins(
+                  fontSize: 11.5,
+                  color: AppColors.primaryBlue,
+                  height: 1.4,
                 ),
               ),
-              Icon(Icons.chevron_right_rounded,
-                  color: Colors.grey.shade400, size: 20),
-            ],
-          ),
+            ),
+          ],
         ),
       );
     }
 
-    final rows = <Widget>[
-      if (_pendingExcuseCount > 0)
-        row(
-          icon: Icons.mark_email_unread_outlined,
-          color: const Color(0xFFF59E0B),
-          text:
-              '$_pendingExcuseCount excuse letter${_pendingExcuseCount == 1 ? '' : 's'} waiting for review',
-          tab: 3,
-        ),
-      if (_atRiskStudentsCount > 0)
-        row(
-          icon: Icons.person_off_outlined,
-          color: const Color(0xFFEF4444),
-          text:
-              '$_atRiskStudentsCount student${_atRiskStudentsCount == 1 ? '' : 's'} with 2 or more absences',
-          tab: 3,
-        ),
-      if (_openSessionCount > 0)
-        row(
-          icon: Icons.qr_code_2_rounded,
-          color: AppColors.primaryBlue,
-          text:
-              '$_openSessionCount attendance session${_openSessionCount == 1 ? '' : 's'} still open',
-          tab: 2,
-        ),
-    ];
-
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.symmetric(
-        horizontal: 14,
-        vertical: rows.isEmpty ? 14 : 6,
-      ),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: const Color(0xFFFEF2F2),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: const Color(0xFFFCA5A5)),
       ),
-      child: rows.isEmpty
-          ? Row(
-              children: [
-                Icon(Icons.check_circle_outline_rounded,
-                    color: Colors.green.shade500, size: 22),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    "You're all caught up. No excuse letters to review, no at-risk students and no open sessions.",
-                    style: GoogleFonts.poppins(
-                      fontSize: 11.5,
-                      color: Colors.grey.shade700,
-                      height: 1.4,
-                    ),
-                  ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEF4444).withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
                 ),
-              ],
-            )
-          : Column(
-              children: [
-                for (int i = 0; i < rows.length; i++) ...[
-                  rows[i],
-                  if (i != rows.length - 1)
-                    Divider(height: 1, color: Colors.grey.shade200),
-                ],
-              ],
+                child: const Icon(
+                  Icons.warning_amber_rounded,
+                  color: Color(0xFFDC2626),
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Absence Alerts',
+                style: GoogleFonts.poppins(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: const Color(0xFF991B1B),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          for (final a in alerts)
+            InkWell(
+              onTap: () => widget.onTabSelected(a['tab'] as int),
+              borderRadius: BorderRadius.circular(10),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 7),
+                child: Row(
+                  children: [
+                    Icon(a['icon'] as IconData,
+                        size: 17, color: const Color(0xFFB91C1C)),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        a['text'] as String,
+                        style: GoogleFonts.poppins(
+                          fontSize: 11.5,
+                          color: const Color(0xFFB91C1C),
+                        ),
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right_rounded,
+                        size: 18, color: Color(0xFFB91C1C)),
+                  ],
+                ),
+              ),
             ),
+        ],
+      ),
     );
   }
 
@@ -995,11 +1163,8 @@ class _FacultyDashboardScreenState extends State<FacultyDashboardScreen> {
 
   /// Attendance rate for each class (lowest first). Tap to open Records.
   Widget _buildClassRatesCard() {
-    Color colorFor(double r) {
-      if (r >= 0.85) return const Color(0xFF10B981);
-      if (r >= 0.70) return const Color(0xFFF59E0B);
-      return const Color(0xFFEF4444);
-    }
+    // Blue and white, like the rest of the dashboard
+    Color colorFor(double r) => AppColors.primaryBlue;
 
     return Container(
       width: double.infinity,
