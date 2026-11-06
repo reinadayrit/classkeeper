@@ -17,7 +17,7 @@ class _FacultyAnnounceScreenState extends State<FacultyAnnounceScreen> {
   // (keep the quotes). You can also pass it with --dart-define=GEMINI_KEY=...
   static const String _apiKey = String.fromEnvironment(
     'GEMINI_KEY',
-    defaultValue: 'AQ.Ab8RN6LLqUGwxeRyKsLnkyJrHWzRifP5Z12n23k7Ql2Mg6ntMg',
+    defaultValue: '',
   );
 
   final TextEditingController _draftController = TextEditingController();
